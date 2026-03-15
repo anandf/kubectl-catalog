@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anandf/kubectl-catalog/pkg/catalog"
+	"github.com/anandf/kubectl-catalog/internal/catalog"
 	"github.com/spf13/cobra"
 )
 

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/anandf/kubectl-catalog/pkg/catalog"
-	"github.com/anandf/kubectl-catalog/pkg/state"
+	"github.com/anandf/kubectl-catalog/internal/catalog"
+	"github.com/anandf/kubectl-catalog/internal/state"
 	"github.com/spf13/cobra"
 )
 
