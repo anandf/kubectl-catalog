@@ -4,10 +4,12 @@ A kubectl plugin that installs OLM operator bundles on vanilla Kubernetes cluste
 
 ```
 kubectl catalog search prometheus --ocp-version 4.20 --pull-secret ~/pull-secret.json
+kubectl catalog search --what-provides argoproj.io/ArgoCD --ocp-version 4.20
 kubectl catalog install cluster-logging --ocp-version 4.20 --pull-secret ~/pull-secret.json
 kubectl catalog generate cluster-logging --ocp-version 4.20 --pull-secret ~/pull-secret.json
+kubectl catalog generate my-operator -o oci://quay.io/myorg/my-operator --push-secret ~/creds.json
 kubectl catalog apply ./cluster-logging-manifests
-kubectl catalog push ./cluster-logging-manifests --registry quay.io --repo-namespace myorg
+kubectl catalog apply oci://quay.io/myorg/my-operator:stable-v6.1
 kubectl catalog list --installed
 kubectl catalog upgrade cluster-logging
 kubectl catalog uninstall cluster-logging
@@ -125,6 +127,15 @@ kubectl catalog list --ocp-version 4.20 --show-channels --pull-secret ~/pull-sec
 
 # Use a custom catalog image
 kubectl catalog search logging --catalog registry.example.com/my-catalog:latest
+
+# Find operators that provide a specific CRD (GVK)
+kubectl catalog search --what-provides argoproj.io/ArgoCD --ocp-version 4.20 --pull-secret ~/pull-secret.json
+
+# Search with full Group/Version/Kind
+kubectl catalog search --what-provides argoproj.io/v1alpha1/ArgoCD --ocp-version 4.20
+
+# Search by Kind only (broad search across all groups)
+kubectl catalog search --what-provides ArgoCD --catalog-type operatorhub
 ```
 
 ### 2. Install an operator
@@ -623,7 +634,7 @@ The pull secret is a standard Docker config JSON file:
 ├── VERSION                    # Semantic version (e.g. 0.0.1)
 ├── cmd/                       # CLI commands (cobra)
 │   ├── root.go                # Global flags, catalog/cluster type resolution
-│   ├── search.go              # Search operators by keyword
+│   ├── search.go              # Search operators by keyword or GVK (--what-provides)
 │   ├── list.go                # List available/installed operators
 │   ├── install.go             # Install with dependency resolution
 │   ├── generate.go            # Generate manifests to directory for review

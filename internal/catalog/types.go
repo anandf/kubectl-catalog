@@ -1,6 +1,10 @@
 package catalog
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sort"
+	"strings"
+)
 
 // FBC represents a parsed File-Based Catalog.
 type FBC struct {
@@ -123,6 +127,145 @@ func (f *FBC) GetBundle(name string) *Bundle {
 		}
 	}
 	return nil
+}
+
+// GVKQuery represents a parsed Group/Version/Kind query.
+type GVKQuery struct {
+	Group   string // required (unless kind-only search)
+	Version string // optional — empty means match any version
+	Kind    string // required
+}
+
+// GVKMatch represents a specific GVK provided by a package.
+type GVKMatch struct {
+	Group   string
+	Version string
+	Kind    string
+}
+
+func (g GVKMatch) String() string {
+	return g.Group + "/" + g.Version + "/" + g.Kind
+}
+
+// GVKProviderResult represents a package that provides one or more matching GVKs.
+type GVKProviderResult struct {
+	PackageName    string
+	DefaultChannel string
+	Description    string
+	MatchedGVKs    []GVKMatch
+}
+
+// ParseGVKQuery parses a flexible GVK query string into a GVKQuery.
+// Supported formats:
+//
+//	group/version/kind     (e.g. argoproj.io/v1alpha1/ArgoCD)
+//	group_version_kind     (e.g. argoproj.io_v1alpha1_ArgoCD)
+//	group/kind             (e.g. argoproj.io/ArgoCD) — version is wildcard
+//	group_kind             (e.g. argoproj.io_ArgoCD) — version is wildcard
+//	kind                   (e.g. ArgoCD) — matches any group/version
+func ParseGVKQuery(input string) GVKQuery {
+	// Normalize underscores to slashes for uniform parsing
+	normalized := strings.ReplaceAll(input, "_", "/")
+	parts := strings.Split(normalized, "/")
+
+	switch len(parts) {
+	case 1:
+		// Kind only
+		return GVKQuery{Kind: parts[0]}
+	case 2:
+		// group/kind
+		return GVKQuery{Group: parts[0], Kind: parts[1]}
+	default:
+		// group/version/kind — if more than 3 parts, the group contains slashes
+		// (unlikely for k8s groups, but handle gracefully)
+		kind := parts[len(parts)-1]
+		version := parts[len(parts)-2]
+		group := strings.Join(parts[:len(parts)-2], "/")
+		return GVKQuery{Group: group, Version: version, Kind: kind}
+	}
+}
+
+// FindGVKProviders returns all packages that contain bundles providing GVKs
+// matching the query. Results are deduplicated by package and sorted by name.
+func (f *FBC) FindGVKProviders(query GVKQuery) []GVKProviderResult {
+	// Map: packageName -> set of matched GVKs (deduplicated)
+	type gvkKey struct{ group, version, kind string }
+	packageGVKs := make(map[string]map[gvkKey]bool)
+
+	for _, b := range f.Bundles {
+		for _, prop := range b.Properties {
+			if prop.Type != "olm.gvk" {
+				continue
+			}
+			var gvk struct {
+				Group   string `json:"group"`
+				Version string `json:"version"`
+				Kind    string `json:"kind"`
+			}
+			if err := json.Unmarshal(prop.Value, &gvk); err != nil {
+				continue
+			}
+
+			if !matchesGVKQuery(query, gvk.Group, gvk.Version, gvk.Kind) {
+				continue
+			}
+
+			key := gvkKey{gvk.Group, gvk.Version, gvk.Kind}
+			if packageGVKs[b.Package] == nil {
+				packageGVKs[b.Package] = make(map[gvkKey]bool)
+			}
+			packageGVKs[b.Package][key] = true
+		}
+	}
+
+	// Build results
+	results := make([]GVKProviderResult, 0, len(packageGVKs))
+	for pkgName, gvks := range packageGVKs {
+		result := GVKProviderResult{PackageName: pkgName}
+
+		if pkg := f.GetPackage(pkgName); pkg != nil {
+			result.DefaultChannel = pkg.DefaultChannel
+			result.Description = pkg.Description
+		}
+
+		for key := range gvks {
+			result.MatchedGVKs = append(result.MatchedGVKs, GVKMatch{
+				Group:   key.group,
+				Version: key.version,
+				Kind:    key.kind,
+			})
+		}
+		// Sort matched GVKs for stable output
+		sort.Slice(result.MatchedGVKs, func(i, j int) bool {
+			return result.MatchedGVKs[i].String() < result.MatchedGVKs[j].String()
+		})
+
+		results = append(results, result)
+	}
+
+	// Sort results by package name
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].PackageName < results[j].PackageName
+	})
+
+	return results
+}
+
+// matchesGVKQuery checks if a provided GVK matches the query.
+func matchesGVKQuery(q GVKQuery, group, version, kind string) bool {
+	// Kind must always match (case-sensitive)
+	if q.Kind != kind {
+		return false
+	}
+	// Group: case-insensitive match, or skip if empty (kind-only query)
+	if q.Group != "" && !strings.EqualFold(q.Group, group) {
+		return false
+	}
+	// Version: exact match, or skip if empty (wildcard)
+	if q.Version != "" && q.Version != version {
+		return false
+	}
+	return true
 }
 
 // GetPackage returns the package with the given name.
