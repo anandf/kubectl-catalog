@@ -112,17 +112,12 @@ Technical gaps and improvements identified from codebase analysis.
 
 ## Testing
 
-### 19. No unit tests for new features
-- **Problem**: Several recently added features lack unit tests:
-  - `SetEnvVars()` in `extract.go`
-  - `SetImagePullSecrets()` in `extract.go`
-  - `InjectWebhookCertVolumes()` and `deploymentUsesWebhooks()` in `extract.go`
-  - `parseEnvVars()` in `root.go`
-  - `partitionResources()` in `uninstall.go`
-  - `determineOperatorNamespace()` in `uninstall.go`
-  - `setSubjectNamespaces()` in `generate.go`
-- **Files**: `cmd/helpers_test.go`, `internal/bundle/extract_test.go`
-- **Work**: Add table-driven unit tests for each function
+### ~~19. No unit tests for new features~~ DONE
+- Added tests for all previously untested functions:
+  - `SetEnvVars()`, `SetImagePullSecrets()`, `InjectWebhookCertVolumes()` in `internal/bundle/extract_test.go`
+  - `parseEnvVars()`, `partitionResources()`, `determineOperatorNamespace()` in `cmd/helpers_test.go`
+  - `setSubjectNamespaces()` was already tested
+  - Also added: `classifyResource()`, `isOCIOutput()`, `sanitizeOCITag()`, `splitImageRef()`, `resolveOCIRef()`, `ParseGVKQuery()`, `FindGVKProviders()`
 
 ### 20. E2E test suite is a skeleton
 - **Problem**: `test/e2e/e2e_test.go` exists but needs real test cases covering install, upgrade, uninstall, and generate workflows.

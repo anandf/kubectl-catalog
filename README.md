@@ -199,25 +199,28 @@ kubectl catalog generate cluster-logging --ocp-version 4.20 -o /tmp/my-manifests
 ### 4. Push to OCI registry for GitOps (Argo CD / FluxCD)
 
 For cluster administrators who prefer not to use Git workflows, manifests can be pushed
-as standard OCI artifacts and consumed directly by Argo CD or FluxCD:
+as standard OCI artifacts and consumed directly by Argo CD or FluxCD. The `generate`
+command supports pushing directly to an OCI registry via `--output oci://...`:
 
 ```bash
-# Step 1: Generate manifests
+# Generate and push in one step
+kubectl catalog generate cluster-logging --ocp-version 4.20 \
+  --pull-secret ~/pull-secret.json \
+  -o oci://registry.example.com/operators/cluster-logging:v5.8.1 \
+  --push-secret ~/push-creds.json
+
+# Or generate to local directory first, review, then push
 kubectl catalog generate cluster-logging --ocp-version 4.20 --pull-secret ~/pull-secret.json
-
-# Step 2: Review and customize
 vim ./cluster-logging-manifests/003-deployment-cluster-logging-operator.yaml
+kubectl catalog generate cluster-logging --ocp-version 4.20 \
+  -o oci://registry.example.com/operators/cluster-logging \
+  --pull-secret ~/pull-secret.json --push-secret ~/push-creds.json
 
-# Step 3: Push to OCI registry
-kubectl catalog push ./cluster-logging-manifests --registry registry.example.com --repo-namespace operators
-
-# Or with explicit package name and tag
-kubectl catalog push ./cluster-logging-manifests --registry registry.example.com --repo-namespace operators --package cluster-logging --tag v5.8.1
-
-# The push command prints ready-to-use Argo CD Application and FluxCD Kustomization configs
+# When no tag is specified, the resolved channel name is used automatically
+# e.g. oci://registry.example.com/operators/cluster-logging:stable-5.9
 ```
 
-The `push` command outputs ready-to-use configs for both Argo CD and FluxCD.
+The `generate` command prints ready-to-use configs for both Argo CD and FluxCD when pushing to OCI.
 
 **Argo CD v3.1+** — configure an Application with an OCI source:
 
@@ -269,9 +272,13 @@ spec:
   prune: true
 ```
 
-To pull manifests back manually (using [ORAS CLI](https://oras.land)):
+To apply from an OCI artifact directly:
 
 ```bash
+# Apply directly from OCI registry
+kubectl catalog apply oci://registry.example.com/operators/cluster-logging:v5.8.1
+
+# Or pull manually with ORAS CLI and apply from local directory
 oras pull registry.example.com/operators/cluster-logging:v5.8.1 -o ./manifests
 kubectl catalog apply ./manifests
 ```
@@ -369,7 +376,8 @@ kubectl catalog clean --bundles
 | `--version` | Specific version to install/generate (install and generate only) |
 | `--env` | Comma-separated environment variables to inject into all operator containers (e.g. `KEY1=val1,KEY2=val2`). Mirrors OLM Subscription `spec.config.env`. |
 | `--force` | Force re-install if already installed (install only) |
-| `-o, --output` | Output directory for generated manifests (generate only; defaults to `./<package-name>-manifests`) |
+| `-o, --output` | Output destination: local directory or `oci://` registry reference (generate only; defaults to `./<package-name>-manifests`). When using `oci://`, if no tag is specified, the resolved channel name or `v<version>` is used automatically. |
+| `--push-secret` | Path to a credentials file for OCI push authentication (generate only; used with `oci://` output) |
 
 ### Uninstall Flags
 
@@ -377,16 +385,11 @@ kubectl catalog clean --bundles
 |---|---|
 | `--force` | Also remove CRDs and custom resources (requires typing `yes` to confirm CRD deletion) |
 
-### Push Flags
+### Search Flags
 
 | Flag | Description |
 |---|---|
-| `--registry` | Registry to push to (default: `quay.io`) |
-| `--package` | Package name for the image (default: from metadata) |
-| `--tag` | Tag for the image (default: `v<version>`) |
-| `--repo-namespace` | Repository namespace/organization (e.g., `myorg`) |
-
-The image reference is computed as `<registry>[/<repo-namespace>]/<package>:<tag>`.
+| `--what-provides` | Find operators providing a specific GVK/CRD (e.g. `argoproj.io/ArgoCD`, `argoproj.io/v1alpha1/ArgoCD`, or just `ArgoCD`) |
 
 ## Catalog Types
 
@@ -637,9 +640,8 @@ The pull secret is a standard Docker config JSON file:
 │   ├── search.go              # Search operators by keyword or GVK (--what-provides)
 │   ├── list.go                # List available/installed operators
 │   ├── install.go             # Install with dependency resolution
-│   ├── generate.go            # Generate manifests to directory for review
-│   ├── apply.go               # Apply previously generated manifests
-│   ├── push.go                # Push manifests as OCI artifact to registry
+│   ├── generate.go            # Generate manifests to directory or OCI registry
+│   ├── apply.go               # Apply manifests from local directory or OCI artifact
 │   ├── upgrade.go             # Upgrade via channel upgrade graph
 │   ├── uninstall.go           # Uninstall with CRD/CR protection
 │   ├── clean.go               # Cache cleanup

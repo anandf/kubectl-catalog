@@ -240,6 +240,238 @@ metadata:
 	}
 }
 
+func TestSetEnvVars(t *testing.T) {
+	dep := makeDeploymentWithContainers("my-deploy", []map[string]interface{}{
+		{
+			"name":  "operator",
+			"image": "quay.io/operator:v1",
+			"env": []interface{}{
+				map[string]interface{}{"name": "EXISTING", "value": "keep"},
+				map[string]interface{}{"name": "REPLACE_ME", "value": "old"},
+			},
+		},
+	})
+
+	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
+	m.SetEnvVars(map[string]string{
+		"REPLACE_ME": "new",
+		"NEW_VAR":    "hello",
+	})
+
+	env := getContainerEnv(t, m.Deployments[0], 0)
+
+	envMap := make(map[string]string)
+	for _, e := range env {
+		eMap := e.(map[string]interface{})
+		envMap[eMap["name"].(string)] = eMap["value"].(string)
+	}
+
+	if envMap["EXISTING"] != "keep" {
+		t.Errorf("EXISTING = %q, want keep", envMap["EXISTING"])
+	}
+	if envMap["REPLACE_ME"] != "new" {
+		t.Errorf("REPLACE_ME = %q, want new", envMap["REPLACE_ME"])
+	}
+	if envMap["NEW_VAR"] != "hello" {
+		t.Errorf("NEW_VAR = %q, want hello", envMap["NEW_VAR"])
+	}
+}
+
+func TestSetEnvVars_Empty(t *testing.T) {
+	dep := makeDeploymentWithContainers("my-deploy", []map[string]interface{}{
+		{"name": "operator", "image": "img:v1"},
+	})
+	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
+
+	// Should be a no-op
+	m.SetEnvVars(nil)
+	m.SetEnvVars(map[string]string{})
+
+	env := getContainerEnv(t, m.Deployments[0], 0)
+	if len(env) != 0 {
+		t.Errorf("expected no env vars, got %d", len(env))
+	}
+}
+
+func TestSetEnvVars_NoContainers(t *testing.T) {
+	dep := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata":   map[string]interface{}{"name": "empty"},
+			"spec":       map[string]interface{}{},
+		},
+	}
+	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
+
+	// Should not panic
+	m.SetEnvVars(map[string]string{"FOO": "bar"})
+}
+
+func TestSetImagePullSecrets(t *testing.T) {
+	dep := makeDeploymentWithContainers("my-deploy", []map[string]interface{}{
+		{"name": "operator", "image": "img:v1"},
+	})
+	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
+
+	m.SetImagePullSecrets("my-pull-secret")
+
+	pullSecrets, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "imagePullSecrets")
+	if len(pullSecrets) != 1 {
+		t.Fatalf("expected 1 imagePullSecret, got %d", len(pullSecrets))
+	}
+	ps := pullSecrets[0].(map[string]interface{})
+	if ps["name"] != "my-pull-secret" {
+		t.Errorf("imagePullSecret name = %q, want my-pull-secret", ps["name"])
+	}
+}
+
+func TestSetImagePullSecrets_NoDuplicate(t *testing.T) {
+	dep := makeDeploymentWithContainers("my-deploy", []map[string]interface{}{
+		{"name": "operator", "image": "img:v1"},
+	})
+	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
+
+	// Call twice with the same secret name
+	m.SetImagePullSecrets("my-pull-secret")
+	m.SetImagePullSecrets("my-pull-secret")
+
+	pullSecrets, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "imagePullSecrets")
+	if len(pullSecrets) != 1 {
+		t.Errorf("expected 1 imagePullSecret (no duplicates), got %d", len(pullSecrets))
+	}
+}
+
+func TestSetImagePullSecrets_MultipleDeployments(t *testing.T) {
+	dep1 := makeDeploymentWithContainers("dep1", []map[string]interface{}{
+		{"name": "op1", "image": "img:v1"},
+	})
+	dep2 := makeDeploymentWithContainers("dep2", []map[string]interface{}{
+		{"name": "op2", "image": "img:v2"},
+	})
+	m := &Manifests{Deployments: []*unstructured.Unstructured{dep1, dep2}}
+
+	m.SetImagePullSecrets("secret")
+
+	for i, dep := range m.Deployments {
+		pullSecrets, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "imagePullSecrets")
+		if len(pullSecrets) != 1 {
+			t.Errorf("deployment %d: expected 1 imagePullSecret, got %d", i, len(pullSecrets))
+		}
+	}
+}
+
+func TestInjectWebhookCertVolumes(t *testing.T) {
+	dep := makeDeploymentWithContainers("my-operator", []map[string]interface{}{
+		{
+			"name":  "manager",
+			"image": "img:v1",
+			"ports": []interface{}{
+				map[string]interface{}{"containerPort": int64(9443)},
+			},
+		},
+	})
+
+	webhook := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "admissionregistration.k8s.io/v1",
+			"kind":       "ValidatingWebhookConfiguration",
+			"metadata":   map[string]interface{}{"name": "my-webhook"},
+		},
+	}
+
+	m := &Manifests{
+		Deployments: []*unstructured.Unstructured{dep},
+		Other:       []*unstructured.Unstructured{webhook},
+	}
+
+	injected := m.InjectWebhookCertVolumes("webhook-server-cert")
+	if !injected {
+		t.Fatal("InjectWebhookCertVolumes returned false, expected true")
+	}
+
+	// Verify volume was added
+	volumes, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "volumes")
+	if len(volumes) != 1 {
+		t.Fatalf("expected 1 volume, got %d", len(volumes))
+	}
+	vol := volumes[0].(map[string]interface{})
+	if vol["name"] != "webhook-server-cert" {
+		t.Errorf("volume name = %q, want webhook-server-cert", vol["name"])
+	}
+
+	// Verify volume mount was added to manager container
+	containers, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+	container := containers[0].(map[string]interface{})
+	mounts := container["volumeMounts"].([]interface{})
+	if len(mounts) != 1 {
+		t.Fatalf("expected 1 volume mount, got %d", len(mounts))
+	}
+	mount := mounts[0].(map[string]interface{})
+	if mount["mountPath"] != WebhookCertMountPath {
+		t.Errorf("mountPath = %q, want %q", mount["mountPath"], WebhookCertMountPath)
+	}
+}
+
+func TestInjectWebhookCertVolumes_NoWebhooks(t *testing.T) {
+	dep := makeDeploymentWithContainers("my-operator", []map[string]interface{}{
+		{"name": "manager", "image": "img:v1"},
+	})
+
+	m := &Manifests{
+		Deployments: []*unstructured.Unstructured{dep},
+	}
+
+	injected := m.InjectWebhookCertVolumes("webhook-server-cert")
+	if injected {
+		t.Error("InjectWebhookCertVolumes returned true for deployment without webhook signals")
+	}
+}
+
+func TestInjectWebhookCertVolumes_AlreadyMounted(t *testing.T) {
+	dep := makeDeploymentWithContainers("my-operator", []map[string]interface{}{
+		{
+			"name":  "manager",
+			"image": "img:v1",
+			"ports": []interface{}{
+				map[string]interface{}{"containerPort": int64(9443)},
+			},
+			"volumeMounts": []interface{}{
+				map[string]interface{}{
+					"name":      "existing-cert",
+					"mountPath": WebhookCertMountPath,
+				},
+			},
+		},
+	})
+
+	webhook := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "admissionregistration.k8s.io/v1",
+			"kind":       "MutatingWebhookConfiguration",
+			"metadata":   map[string]interface{}{"name": "my-webhook"},
+		},
+	}
+
+	m := &Manifests{
+		Deployments: []*unstructured.Unstructured{dep},
+		Other:       []*unstructured.Unstructured{webhook},
+	}
+
+	injected := m.InjectWebhookCertVolumes("webhook-server-cert")
+	if injected {
+		t.Error("InjectWebhookCertVolumes should skip deployments that already have the mount")
+	}
+}
+
+func TestInjectWebhookCertVolumes_NoDeployments(t *testing.T) {
+	m := &Manifests{}
+	injected := m.InjectWebhookCertVolumes("webhook-server-cert")
+	if injected {
+		t.Error("InjectWebhookCertVolumes returned true with no deployments")
+	}
+}
+
 // Helper functions
 
 func makeDeploymentWithContainers(name string, containers []map[string]interface{}) *unstructured.Unstructured {

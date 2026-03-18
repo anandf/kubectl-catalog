@@ -368,6 +368,293 @@ func TestDirSize_NonExistent(t *testing.T) {
 	}
 }
 
+func TestParseEnvVars(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    map[string]string
+		wantErr bool
+	}{
+		{
+			name:  "single var",
+			input: "KEY=value",
+			want:  map[string]string{"KEY": "value"},
+		},
+		{
+			name:  "multiple vars",
+			input: "KEY1=val1,KEY2=val2,KEY3=val3",
+			want:  map[string]string{"KEY1": "val1", "KEY2": "val2", "KEY3": "val3"},
+		},
+		{
+			name:  "value with equals sign",
+			input: "DSN=host=localhost port=5432",
+			want:  map[string]string{"DSN": "host=localhost port=5432"},
+		},
+		{
+			name:  "empty value",
+			input: "KEY=",
+			want:  map[string]string{"KEY": ""},
+		},
+		{
+			name:  "whitespace trimmed",
+			input: " KEY1 = val1 , KEY2=val2 ",
+			want:  map[string]string{"KEY1": " val1", "KEY2": "val2"},
+		},
+		{
+			name:    "missing equals",
+			input:   "INVALID",
+			wantErr: true,
+		},
+		{
+			name:    "empty key",
+			input:   "=value",
+			wantErr: true,
+		},
+		{
+			name:  "empty string",
+			input: "",
+			want:  nil,
+		},
+		{
+			name:  "trailing comma ignored",
+			input: "KEY=val,",
+			want:  map[string]string{"KEY": "val"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseEnvVars(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d vars, want %d", len(got), len(tt.want))
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("key %q = %q, want %q", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
+func TestPartitionResources(t *testing.T) {
+	resources := []unstructured.Unstructured{
+		{Object: map[string]interface{}{
+			"apiVersion": "apiextensions.k8s.io/v1",
+			"kind":       "CustomResourceDefinition",
+			"metadata":   map[string]interface{}{"name": "widgets.example.com"},
+			"spec": map[string]interface{}{
+				"group": "example.com",
+				"names": map[string]interface{}{"kind": "Widget", "plural": "widgets"},
+			},
+		}},
+		{Object: map[string]interface{}{
+			"apiVersion": "example.com/v1",
+			"kind":       "Widget",
+			"metadata":   map[string]interface{}{"name": "my-widget", "namespace": "default"},
+		}},
+		{Object: map[string]interface{}{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata":   map[string]interface{}{"name": "my-deploy", "namespace": "default"},
+		}},
+		{Object: map[string]interface{}{
+			"apiVersion": "rbac.authorization.k8s.io/v1",
+			"kind":       "ClusterRole",
+			"metadata":   map[string]interface{}{"name": "my-role"},
+		}},
+	}
+
+	crds, crs, operational := partitionResources(resources)
+
+	if len(crds) != 1 {
+		t.Errorf("expected 1 CRD, got %d", len(crds))
+	}
+	if len(crs) != 1 {
+		t.Errorf("expected 1 custom resource, got %d", len(crs))
+	}
+	if crs[0].GetKind() != "Widget" {
+		t.Errorf("custom resource kind = %q, want Widget", crs[0].GetKind())
+	}
+	if len(operational) != 2 {
+		t.Errorf("expected 2 operational resources, got %d", len(operational))
+	}
+}
+
+func TestPartitionResources_NoCRDs(t *testing.T) {
+	resources := []unstructured.Unstructured{
+		{Object: map[string]interface{}{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata":   map[string]interface{}{"name": "deploy"},
+		}},
+	}
+
+	crds, crs, operational := partitionResources(resources)
+	if len(crds) != 0 {
+		t.Errorf("expected 0 CRDs, got %d", len(crds))
+	}
+	if len(crs) != 0 {
+		t.Errorf("expected 0 custom resources, got %d", len(crs))
+	}
+	if len(operational) != 1 {
+		t.Errorf("expected 1 operational, got %d", len(operational))
+	}
+}
+
+func TestDetermineOperatorNamespace(t *testing.T) {
+	tests := []struct {
+		name      string
+		resources []unstructured.Unstructured
+		want      string
+	}{
+		{
+			name: "most common namespace wins",
+			resources: []unstructured.Unstructured{
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"namespace": "ns-a"}}},
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"namespace": "ns-b"}}},
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"namespace": "ns-a"}}},
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"namespace": "ns-a"}}},
+			},
+			want: "ns-a",
+		},
+		{
+			name: "cluster-scoped resources ignored",
+			resources: []unstructured.Unstructured{
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "cluster-thing"}}},
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"namespace": "the-ns"}}},
+			},
+			want: "the-ns",
+		},
+		{
+			name: "empty resources",
+			resources: []unstructured.Unstructured{},
+			want: "",
+		},
+		{
+			name: "all cluster-scoped",
+			resources: []unstructured.Unstructured{
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "cr1"}}},
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "cr2"}}},
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := determineOperatorNamespace(tt.resources)
+			if got != tt.want {
+				t.Errorf("determineOperatorNamespace() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifyResource(t *testing.T) {
+	tests := []struct {
+		name       string
+		kind       string
+		wantField  string
+	}{
+		{"CRD", "CustomResourceDefinition", "CRDs"},
+		{"ClusterRole", "ClusterRole", "RBAC"},
+		{"ClusterRoleBinding", "ClusterRoleBinding", "RBAC"},
+		{"Role", "Role", "RBAC"},
+		{"RoleBinding", "RoleBinding", "RBAC"},
+		{"ServiceAccount", "ServiceAccount", "RBAC"},
+		{"Deployment", "Deployment", "Deployments"},
+		{"Service", "Service", "Services"},
+		{"ConfigMap", "ConfigMap", "Other"},
+		{"PriorityClass", "PriorityClass", "Other"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &bundle.Manifests{}
+			obj := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       tt.kind,
+					"metadata":   map[string]interface{}{"name": "test"},
+				},
+			}
+
+			classifyResource(m, obj)
+
+			var count int
+			switch tt.wantField {
+			case "CRDs":
+				count = len(m.CRDs)
+			case "RBAC":
+				count = len(m.RBAC)
+			case "Deployments":
+				count = len(m.Deployments)
+			case "Services":
+				count = len(m.Services)
+			case "Other":
+				count = len(m.Other)
+			}
+			if count != 1 {
+				t.Errorf("expected 1 resource in %s, got %d", tt.wantField, count)
+			}
+		})
+	}
+}
+
+func TestClassifyResource_TLSSecret(t *testing.T) {
+	m := &bundle.Manifests{}
+	obj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Secret",
+			"metadata": map[string]interface{}{
+				"name": "my-tls",
+				"annotations": map[string]interface{}{
+					"kubectl-catalog.io/self-signed": "true",
+				},
+			},
+		},
+	}
+
+	classifyResource(m, obj)
+	if len(m.Other) != 1 {
+		t.Errorf("TLS secret should go to Other, got %d in Other", len(m.Other))
+	}
+}
+
+func TestIsOCIOutput(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"oci://quay.io/org/repo:v1", true},
+		{"oci://localhost:5000/repo", true},
+		{"./my-directory", false},
+		{"/tmp/manifests", false},
+		{"", false},
+		{"OCI://uppercase", false}, // case-sensitive
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := isOCIOutput(tt.input)
+			if got != tt.want {
+				t.Errorf("isOCIOutput(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSanitizeOCITag(t *testing.T) {
 	tests := []struct {
 		input string
