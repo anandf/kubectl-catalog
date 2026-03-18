@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -248,7 +249,7 @@ Examples:
 
 		// Push to OCI registry if output is oci://
 		if isOCI {
-			ociRef := strings.TrimPrefix(generateOutput, "oci://")
+			ociRef := resolveOCIRef(strings.TrimPrefix(generateOutput, "oci://"), lastMeta)
 			if err := pushToOCI(ctx, outputDir, ociRef, lastMeta); err != nil {
 				return err
 			}
@@ -264,6 +265,42 @@ Examples:
 // isOCIOutput returns true if the output destination is an OCI registry reference.
 func isOCIOutput(output string) bool {
 	return strings.HasPrefix(output, "oci://")
+}
+
+// resolveOCIRef appends a default tag to the OCI reference if the user didn't
+// specify one. The tag is derived from --version (v<version>) or the resolved
+// channel name.
+func resolveOCIRef(ref string, meta *generateMetadata) string {
+	_, tag := splitImageRef(ref)
+	if tag != "latest" {
+		// User provided an explicit tag — use as-is
+		return ref
+	}
+
+	// Derive a tag from the resolved metadata
+	var defaultTag string
+	if generateVersion != "" {
+		defaultTag = "v" + meta.Version
+	} else {
+		defaultTag = meta.Channel
+	}
+
+	return ref + ":" + sanitizeOCITag(defaultTag)
+}
+
+// ociTagInvalidChars matches characters not allowed in OCI tags.
+// Valid OCI tag chars: [a-zA-Z0-9_.-]
+var ociTagInvalidChars = regexp.MustCompile(`[^a-zA-Z0-9_.\-]`)
+
+// sanitizeOCITag replaces characters that are invalid in OCI tags with hyphens.
+func sanitizeOCITag(tag string) string {
+	sanitized := ociTagInvalidChars.ReplaceAllString(tag, "-")
+	// Trim leading/trailing hyphens and dots
+	sanitized = strings.Trim(sanitized, "-.")
+	if sanitized == "" {
+		return "latest"
+	}
+	return sanitized
 }
 
 // pushToOCI packages the manifest directory as an OCI artifact and pushes it.

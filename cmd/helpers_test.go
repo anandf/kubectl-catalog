@@ -368,6 +368,116 @@ func TestDirSize_NonExistent(t *testing.T) {
 	}
 }
 
+func TestSanitizeOCITag(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"stable-v6.1", "stable-v6.1"},
+		{"stable_5.9", "stable_5.9"},
+		{"v1.2.3", "v1.2.3"},
+		{"channel/with/slashes", "channel-with-slashes"},
+		{"has spaces", "has-spaces"},
+		{"special!@#chars", "special---chars"},
+		{"...leading-dots", "leading-dots"},
+		{"---leading-hyphens", "leading-hyphens"},
+		{"trailing---", "trailing"},
+		{"", "latest"},
+		{"!!!", "latest"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := sanitizeOCITag(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeOCITag(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSplitImageRef(t *testing.T) {
+	tests := []struct {
+		ref     string
+		wantRepo string
+		wantTag  string
+	}{
+		{"quay.io/org/repo:v1.2", "quay.io/org/repo", "v1.2"},
+		{"quay.io/org/repo", "quay.io/org/repo", "latest"},
+		{"quay.io/org/repo@sha256:abc123", "quay.io/org/repo", "sha256:abc123"},
+		{"localhost:5000/repo:tag", "localhost:5000/repo", "tag"},
+		{"localhost:5000/repo", "localhost:5000/repo", "latest"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			repo, tag := splitImageRef(tt.ref)
+			if repo != tt.wantRepo {
+				t.Errorf("splitImageRef(%q) repo = %q, want %q", tt.ref, repo, tt.wantRepo)
+			}
+			if tag != tt.wantTag {
+				t.Errorf("splitImageRef(%q) tag = %q, want %q", tt.ref, tag, tt.wantTag)
+			}
+		})
+	}
+}
+
+func TestResolveOCIRef(t *testing.T) {
+	tests := []struct {
+		name           string
+		ref            string
+		version        string // simulates --version flag
+		metaVersion    string
+		metaChannel    string
+		want           string
+	}{
+		{
+			name:        "explicit tag unchanged",
+			ref:         "quay.io/org/repo:custom-tag",
+			metaChannel: "stable-v6.1",
+			want:        "quay.io/org/repo:custom-tag",
+		},
+		{
+			name:        "no tag uses channel",
+			ref:         "quay.io/org/repo",
+			metaChannel: "stable-v6.1",
+			want:        "quay.io/org/repo:stable-v6.1",
+		},
+		{
+			name:        "version flag uses v-prefixed version",
+			ref:         "quay.io/org/repo",
+			version:     "5.9.9",
+			metaVersion: "5.9.9",
+			metaChannel: "stable-5.9",
+			want:        "quay.io/org/repo:v5.9.9",
+		},
+		{
+			name:        "channel with special chars sanitized",
+			ref:         "quay.io/org/repo",
+			metaChannel: "preview/beta",
+			want:        "quay.io/org/repo:preview-beta",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Save and restore global state
+			old := generateVersion
+			defer func() { generateVersion = old }()
+			generateVersion = tt.version
+
+			meta := &generateMetadata{
+				Version: tt.metaVersion,
+				Channel: tt.metaChannel,
+			}
+			got := resolveOCIRef(tt.ref, meta)
+			if got != tt.want {
+				t.Errorf("resolveOCIRef(%q) = %q, want %q", tt.ref, got, tt.want)
+			}
+		})
+	}
+}
+
 func writeTestFile(t *testing.T, dir, name string, size int) {
 	t.Helper()
 	data := make([]byte, size)
