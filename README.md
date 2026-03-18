@@ -464,6 +464,27 @@ This matters because many OLM operators assume OpenShift-specific infrastructure
 
 On `ocp` and `okd`, these adjustments are skipped since the platform handles them natively.
 
+## Shell Completion
+
+`kubectl-catalog` supports tab-completion for bash, zsh, fish, and powershell:
+
+```bash
+# Bash
+source <(kubectl-catalog completion bash)
+
+# Zsh
+kubectl-catalog completion zsh > "${fpath[1]}/_kubectl-catalog"
+
+# Fish
+kubectl-catalog completion fish | source
+```
+
+Completions include:
+- All subcommands and flags
+- Package names from the catalog (for `install`, `generate`, `search`)
+- Installed package names from the cluster (for `upgrade`, `uninstall`, `status`)
+- Static values for `--catalog-type`, `--cluster-type`, and `--install-mode`
+
 ## Install Modes
 
 Operators declare which install modes they support in their CSV (`spec.installModes`). `kubectl-catalog` respects these declarations:

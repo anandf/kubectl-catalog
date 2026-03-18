@@ -48,7 +48,10 @@ prompt requires you to type "yes" before proceeding.`,
 
 		installed, err := stateManager.GetInstalled(ctx, packageName)
 		if err != nil {
-			return fmt.Errorf("package %q is not installed: %w", packageName, err)
+			return withHint(
+				fmt.Errorf("package %q is not installed: %w", packageName, err),
+				"run 'kubectl catalog list --installed' to see installed packages",
+			)
 		}
 
 		// Get all resources belonging to this package (searches all namespaces)
@@ -304,5 +307,6 @@ func promptConfirmFull() bool {
 
 func init() {
 	uninstallCmd.Flags().BoolVar(&uninstallForce, "force", false, "also remove CRDs and custom resources (requires typing 'yes' to confirm)")
+	uninstallCmd.ValidArgsFunction = completeInstalledPackages
 	rootCmd.AddCommand(uninstallCmd)
 }

@@ -44,7 +44,10 @@ Examples:
 
 		installed, err := stateManager.GetInstalled(ctx, packageName)
 		if err != nil {
-			return fmt.Errorf("package %q is not installed: %w", packageName, err)
+			return withHint(
+				fmt.Errorf("package %q is not installed: %w", packageName, err),
+				"run 'kubectl catalog list --installed' to see installed packages",
+			)
 		}
 
 		// Build a dynamic client for querying pods, events, etc.
@@ -409,5 +412,6 @@ func newDynamicClient() (dynamic.Interface, error) {
 
 func init() {
 	statusCmd.Flags().BoolVar(&showEvents, "show-events", false, "show recent events in the operator's namespace")
+	statusCmd.ValidArgsFunction = completeInstalledPackages
 	rootCmd.AddCommand(statusCmd)
 }

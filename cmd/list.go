@@ -56,6 +56,9 @@ func listInstalledOperators(ctx context.Context) error {
 	for _, op := range operators {
 		fmt.Printf("%-35s %-15s %-15s %-10d %s\n",
 			op.PackageName, op.Version, op.Channel, len(op.Resources), op.CatalogRef)
+		if op.Warning != "" {
+			fmt.Printf("  WARNING: %s\n", op.Warning)
+		}
 	}
 	return nil
 }

@@ -219,6 +219,120 @@ spec:
 	}
 }
 
+func TestExtract_MultiDocumentYAML(t *testing.T) {
+	bundleDir := t.TempDir()
+	manifestDir := filepath.Join(bundleDir, "manifests")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A single file with multiple YAML documents separated by ---
+	multiDoc := `apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: my-sa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: my-role
+rules: []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-operator
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+      - name: operator
+        image: quay.io/my-operator:v1`
+
+	os.WriteFile(filepath.Join(manifestDir, "combined.yaml"), []byte(multiDoc), 0o644)
+
+	manifests, err := Extract(bundleDir)
+	if err != nil {
+		t.Fatalf("Extract() error: %v", err)
+	}
+
+	if len(manifests.RBAC) != 2 {
+		t.Errorf("RBAC count = %d, want 2 (ServiceAccount + ClusterRole)", len(manifests.RBAC))
+	}
+	if len(manifests.Deployments) != 1 {
+		t.Errorf("Deployments count = %d, want 1", len(manifests.Deployments))
+	}
+}
+
+func TestExtract_MultiDocumentYAML_WithEmptyDocs(t *testing.T) {
+	bundleDir := t.TempDir()
+	manifestDir := filepath.Join(bundleDir, "manifests")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Document separators with empty/comment-only documents
+	multiDoc := `---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-svc
+spec:
+  ports:
+  - port: 443
+---
+# This is a comment-only document
+---
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-cm
+data:
+  key: value
+`
+
+	os.WriteFile(filepath.Join(manifestDir, "multi.yaml"), []byte(multiDoc), 0o644)
+
+	manifests, err := Extract(bundleDir)
+	if err != nil {
+		t.Fatalf("Extract() error: %v", err)
+	}
+
+	if len(manifests.Services) != 1 {
+		t.Errorf("Services count = %d, want 1", len(manifests.Services))
+	}
+	if len(manifests.Other) != 1 {
+		t.Errorf("Other count = %d, want 1 (ConfigMap)", len(manifests.Other))
+	}
+}
+
+func TestSplitYAMLDocuments(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  int
+	}{
+		{"single document", "apiVersion: v1\nkind: Pod", 1},
+		{"two documents", "apiVersion: v1\nkind: Pod\n---\napiVersion: v1\nkind: Service", 2},
+		{"leading separator", "---\napiVersion: v1\nkind: Pod", 1},
+		{"trailing separator", "apiVersion: v1\nkind: Pod\n---\n", 1},
+		{"empty documents skipped", "apiVersion: v1\nkind: Pod\n---\n\n---\napiVersion: v1\nkind: Service", 2},
+		{"comment-only document skipped", "apiVersion: v1\nkind: Pod\n---\n# just a comment\n---\napiVersion: v1\nkind: Service", 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			docs := splitYAMLDocuments([]byte(tt.input))
+			if len(docs) != tt.want {
+				t.Errorf("splitYAMLDocuments() returned %d documents, want %d", len(docs), tt.want)
+			}
+		})
+	}
+}
+
 func TestExtract_FallbackToRoot(t *testing.T) {
 	// When there's no manifests/ subdirectory, Extract falls back to the root
 	bundleDir := t.TempDir()

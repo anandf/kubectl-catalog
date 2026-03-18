@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -8,7 +9,9 @@ import (
 
 	"github.com/anandf/kubectl-catalog/internal/applier"
 	"github.com/anandf/kubectl-catalog/internal/bundle"
+	"github.com/anandf/kubectl-catalog/internal/catalog"
 	"github.com/anandf/kubectl-catalog/internal/registry"
+	"github.com/anandf/kubectl-catalog/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -71,6 +74,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "show what would be applied without making changes")
 	rootCmd.PersistentFlags().BoolVar(&noWait, "no-wait", false, "skip deployment readiness checks after install/upgrade")
 	rootCmd.PersistentFlags().DurationVar(&deploymentTimeout, "deployment-timeout", 0, "timeout for deployment readiness checks (defaults to 5m; use --no-wait to skip entirely)")
+
+	registerStaticFlagCompletions()
 }
 
 // isVanillaK8s returns true if the target cluster does not have the
@@ -102,7 +107,7 @@ func resolveCatalogImage(cmdCatalog string) (string, error) {
 	}
 
 	if ocpVersion == "" {
-		return "", fmt.Errorf("--ocp-version is required for catalog type %q", catalogType)
+		return "", fmt.Errorf("--ocp-version is required for catalog type %q; use --ocp-version (e.g. 4.20) or --catalog to specify the catalog image directly", catalogType)
 	}
 	return fmt.Sprintf("%s:v%s", ct.imageBase, ocpVersion), nil
 }
@@ -120,7 +125,7 @@ func newImagePuller() (*registry.ImagePuller, error) {
 // registry.redhat.io and no --pull-secret was provided.
 func requirePullSecretForRedHat(catalogImage string) error {
 	if strings.HasPrefix(catalogImage, "registry.redhat.io/") && pullSecretPath == "" {
-		return fmt.Errorf("--pull-secret is required when using Red Hat catalog images (registry.redhat.io)")
+		return fmt.Errorf("--pull-secret is required when using Red Hat catalog images (registry.redhat.io)\nHint: download your pull secret from https://console.redhat.com/openshift/downloads#tool-pull-secret")
 	}
 	return nil
 }
@@ -199,6 +204,93 @@ func applierOptions() applier.Options {
 		NoWait:                 noWait,
 		DeploymentReadyTimeout: deploymentTimeout,
 	}
+}
+
+// completeCatalogPackages returns package names from the catalog for shell completion.
+// It silently returns no completions if the catalog can't be loaded (e.g., missing flags).
+func completeCatalogPackages(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	imageRef, err := resolveCatalogImage("")
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	puller, err := newImagePuller()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	fbc, err := catalog.Load(ctx, imageRef, false, puller)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	var names []string
+	for _, pkg := range fbc.Packages {
+		if toComplete == "" || strings.HasPrefix(pkg.Name, toComplete) {
+			names = append(names, pkg.Name)
+		}
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
+}
+
+// completeInstalledPackages returns installed package names for shell completion.
+func completeInstalledPackages(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	stateManager, err := state.NewManager(kubeconfig, namespace)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	operators, err := stateManager.ListInstalled(ctx)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	var names []string
+	for _, op := range operators {
+		if toComplete == "" || strings.HasPrefix(op.PackageName, toComplete) {
+			names = append(names, op.PackageName)
+		}
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
+}
+
+// registerStaticFlagCompletions registers completions for flags with a known set of values.
+func registerStaticFlagCompletions() {
+	rootCmd.RegisterFlagCompletionFunc("catalog-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"redhat", "community", "certified", "operatorhub"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	rootCmd.RegisterFlagCompletionFunc("cluster-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"k8s", "ocp", "okd"}, cobra.ShellCompDirectiveNoFileComp
+	})
+
+	for _, cmd := range []*cobra.Command{installCmd, upgradeCmd, generateCmd} {
+		cmd.RegisterFlagCompletionFunc("install-mode", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+			return []string{"AllNamespaces", "SingleNamespace", "OwnNamespace"}, cobra.ShellCompDirectiveNoFileComp
+		})
+	}
+}
+
+// withHint wraps an error with a contextual hint suggesting what the user
+// should do next. If err is nil, nil is returned.
+func withHint(err error, hint string) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w\nHint: %s", err, hint)
 }
 
 func Execute() error {

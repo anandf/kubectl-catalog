@@ -136,7 +136,10 @@ Examples:
 		res := resolver.New(fbc)
 		installPlan, err := res.Resolve(packageName, generateChannel, generateVersion)
 		if err != nil {
-			return fmt.Errorf("failed to resolve %q: %w", packageName, err)
+			return withHint(
+				fmt.Errorf("failed to resolve %q: %w", packageName, err),
+				"run 'kubectl catalog search <keyword>' to find available packages, or 'kubectl catalog list --show-channels' to see channels and versions",
+			)
 		}
 
 		fmt.Printf("Resolved install plan: %d bundle(s)\n", len(installPlan.Bundles))
@@ -653,5 +656,6 @@ func init() {
 	generateCmd.Flags().StringVarP(&generateOutput, "output", "o", "", "output destination: local directory or oci:// registry reference (defaults to ./<package-name>-manifests)")
 	generateCmd.Flags().StringVar(&generateEnv, "env", "", "comma-separated environment variables to inject into operator containers (e.g. KEY1=val1,KEY2=val2)")
 	generateCmd.Flags().StringVar(&generatePushSecret, "push-secret", "", "path to a credentials file for OCI push authentication (only used with oci:// output)")
+	generateCmd.ValidArgsFunction = completeCatalogPackages
 	rootCmd.AddCommand(generateCmd)
 }

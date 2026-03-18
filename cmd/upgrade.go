@@ -55,7 +55,10 @@ the catalog reference stored in the installed resource annotations is used.`,
 
 		installed, err := stateManager.GetInstalled(ctx, packageName)
 		if err != nil {
-			return fmt.Errorf("package %q is not installed: %w", packageName, err)
+			return withHint(
+				fmt.Errorf("package %q is not installed: %w", packageName, err),
+				"run 'kubectl catalog list --installed' to see installed packages",
+			)
 		}
 
 		fmt.Printf("Current: %s v%s (channel: %s)\n", packageName, installed.Version, installed.Channel)
@@ -100,7 +103,10 @@ the catalog reference stored in the installed resource annotations is used.`,
 		res := resolver.New(fbc)
 		upgradePlan, err := res.ResolveUpgrade(packageName, channel, installed.Version)
 		if err != nil {
-			return fmt.Errorf("no upgrade available: %w", err)
+			return withHint(
+				fmt.Errorf("no upgrade available: %w", err),
+				"run 'kubectl catalog list --show-channels' to check available versions, or try a different --channel",
+			)
 		}
 
 		if len(upgradePlan.Bundles) == 0 {
@@ -446,5 +452,6 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeMode, "install-mode", "", "install mode: AllNamespaces, SingleNamespace, OwnNamespace (defaults to operator's preferred mode)")
 	upgradeCmd.Flags().StringVar(&upgradeEnv, "env", "", "comma-separated environment variables to inject into operator containers (e.g. KEY1=val1,KEY2=val2)")
 	upgradeCmd.Flags().BoolVar(&upgradeDiff, "diff", false, "show diff of current vs new manifests without applying")
+	upgradeCmd.ValidArgsFunction = completeInstalledPackages
 	rootCmd.AddCommand(upgradeCmd)
 }

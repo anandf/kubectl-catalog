@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -80,6 +81,7 @@ func (m *Manifests) AllResources() []*unstructured.Unstructured {
 
 // Extract reads a bundle directory and extracts Kubernetes manifests.
 // It handles CSVs by converting them to their constituent Deployments, RBAC, etc.
+// YAML files may contain multiple documents separated by "---".
 func Extract(bundleDir string) (*Manifests, error) {
 	manifestDir := filepath.Join(bundleDir, manifestsDir)
 	if _, err := os.Stat(manifestDir); os.IsNotExist(err) {
@@ -108,40 +110,48 @@ func Extract(bundleDir string) (*Manifests, error) {
 			return fmt.Errorf("reading %s: %w", path, err)
 		}
 
-		obj := &unstructured.Unstructured{}
-		jsonData, err := yaml.YAMLToJSON(data)
-		if err != nil {
-			return fmt.Errorf("converting YAML to JSON in %s: %w", path, err)
-		}
-		if err := json.Unmarshal(jsonData, &obj.Object); err != nil {
-			return fmt.Errorf("unmarshaling %s: %w", path, err)
-		}
+		// Split multi-document YAML files on "---" boundaries
+		docs := splitYAMLDocuments(data)
 
-		gvk := obj.GroupVersionKind()
-
-		// Handle ClusterServiceVersion specially - extract deployments and RBAC from it
-		if gvk.Kind == "ClusterServiceVersion" {
-			if csvSeen {
-				fmt.Printf("  Warning: multiple CSVs found in bundle; using CSV from %s\n", path)
-			}
-			csvSeen = true
-			extracted, err := extractFromCSV(obj)
+		for docIdx, doc := range docs {
+			obj := &unstructured.Unstructured{}
+			jsonData, err := yaml.YAMLToJSON(doc)
 			if err != nil {
-				return fmt.Errorf("extracting from CSV in %s: %w", path, err)
+				return fmt.Errorf("converting YAML to JSON in %s (document %d): %w", path, docIdx+1, err)
 			}
-			manifests.Deployments = append(manifests.Deployments, extracted.Deployments...)
-			manifests.RBAC = append(manifests.RBAC, extracted.RBAC...)
-			manifests.Services = append(manifests.Services, extracted.Services...)
-			if extracted.SuggestedNamespace != "" {
-				manifests.SuggestedNamespace = extracted.SuggestedNamespace
+			if err := json.Unmarshal(jsonData, &obj.Object); err != nil {
+				return fmt.Errorf("unmarshaling %s (document %d): %w", path, docIdx+1, err)
 			}
-			if len(extracted.InstallModes) > 0 {
-				manifests.InstallModes = extracted.InstallModes
+			if len(obj.Object) == 0 {
+				continue // skip empty documents
 			}
-			return nil
-		}
 
-		classifyAndAdd(manifests, obj)
+			gvk := obj.GroupVersionKind()
+
+			// Handle ClusterServiceVersion specially - extract deployments and RBAC from it
+			if gvk.Kind == "ClusterServiceVersion" {
+				if csvSeen {
+					fmt.Printf("  Warning: multiple CSVs found in bundle; using CSV from %s\n", path)
+				}
+				csvSeen = true
+				extracted, err := extractFromCSV(obj)
+				if err != nil {
+					return fmt.Errorf("extracting from CSV in %s: %w", path, err)
+				}
+				manifests.Deployments = append(manifests.Deployments, extracted.Deployments...)
+				manifests.RBAC = append(manifests.RBAC, extracted.RBAC...)
+				manifests.Services = append(manifests.Services, extracted.Services...)
+				if extracted.SuggestedNamespace != "" {
+					manifests.SuggestedNamespace = extracted.SuggestedNamespace
+				}
+				if len(extracted.InstallModes) > 0 {
+					manifests.InstallModes = extracted.InstallModes
+				}
+				continue
+			}
+
+			classifyAndAdd(manifests, obj)
+		}
 		return nil
 	})
 
@@ -150,6 +160,37 @@ func Extract(bundleDir string) (*Manifests, error) {
 	}
 
 	return manifests, nil
+}
+
+// splitYAMLDocuments splits raw YAML data on "---" document separators.
+// Returns at least one document. Empty documents (whitespace/comments only) are
+// included but will be skipped during unmarshaling when obj.Object is empty.
+func splitYAMLDocuments(data []byte) [][]byte {
+	docs := bytes.Split(data, []byte("\n---"))
+	var result [][]byte
+	for _, doc := range docs {
+		trimmed := bytes.TrimSpace(doc)
+		if len(trimmed) == 0 {
+			continue
+		}
+		// Skip documents that are only comments
+		allComments := true
+		for _, line := range bytes.Split(trimmed, []byte("\n")) {
+			line = bytes.TrimSpace(line)
+			if len(line) > 0 && line[0] != '#' {
+				allComments = false
+				break
+			}
+		}
+		if allComments {
+			continue
+		}
+		result = append(result, doc)
+	}
+	if len(result) == 0 {
+		return [][]byte{data}
+	}
+	return result
 }
 
 // SetWatchNamespace injects the WATCH_NAMESPACE environment variable into all

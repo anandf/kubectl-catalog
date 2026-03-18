@@ -38,6 +38,9 @@ type InstalledOperator struct {
 	BundleName  string
 	BundleImage string
 	Resources   []ResourceInfo
+	// Warning is set when resource annotations are inconsistent (e.g., after
+	// a partial uninstall or failed upgrade).
+	Warning string
 }
 
 // ResourceInfo identifies a tracked resource in the cluster.
@@ -88,6 +91,9 @@ func NewManager(kubeconfig, namespace string) (*Manager, error) {
 
 // GetInstalled discovers the installed state of a specific package by finding
 // resources labeled with kubectl-catalog.io/package=<packageName>.
+// It prefers metadata from authoritative resource types (Deployments, CRDs)
+// over less authoritative ones (RBAC) to reduce the risk of stale data after
+// a partial uninstall.
 func (m *Manager) GetInstalled(ctx context.Context, packageName string) (*InstalledOperator, error) {
 	resources, err := m.findResourcesByPackage(ctx, packageName)
 	if err != nil {
@@ -97,8 +103,8 @@ func (m *Manager) GetInstalled(ctx context.Context, packageName string) (*Instal
 		return nil, fmt.Errorf("package %q is not installed", packageName)
 	}
 
-	first := resources[0]
-	annotations := first.GetAnnotations()
+	best := bestMetadataResource(resources)
+	annotations := best.GetAnnotations()
 
 	op := &InstalledOperator{
 		PackageName: packageName,
@@ -120,6 +126,9 @@ func (m *Manager) GetInstalled(ctx context.Context, packageName string) (*Instal
 		})
 	}
 
+	// Detect annotation inconsistencies across resources
+	op.Warning = detectInconsistencies(resources, op.Version, op.Channel)
+
 	return op, nil
 }
 
@@ -131,39 +140,44 @@ func (m *Manager) ListInstalled(ctx context.Context) ([]InstalledOperator, error
 		return nil, err
 	}
 
-	byPackage := make(map[string]*InstalledOperator)
+	// Group resources by package name
+	resourcesByPkg := make(map[string][]unstructured.Unstructured)
 	for _, r := range allResources {
 		labels := r.GetLabels()
 		pkgName := labels[LabelPackage]
 		if pkgName == "" {
 			continue
 		}
-
-		if _, exists := byPackage[pkgName]; !exists {
-			annotations := r.GetAnnotations()
-			byPackage[pkgName] = &InstalledOperator{
-				PackageName: pkgName,
-				Version:     annotations[AnnVersion],
-				Channel:     annotations[AnnChannel],
-				BundleName:  annotations[AnnBundle],
-				BundleImage: annotations[AnnBundleImage],
-				CatalogRef:  annotations[AnnCatalog],
-			}
-		}
-
-		gvk := r.GroupVersionKind()
-		byPackage[pkgName].Resources = append(byPackage[pkgName].Resources, ResourceInfo{
-			Group:     gvk.Group,
-			Version:   gvk.Version,
-			Kind:      gvk.Kind,
-			Name:      r.GetName(),
-			Namespace: r.GetNamespace(),
-		})
+		resourcesByPkg[pkgName] = append(resourcesByPkg[pkgName], r)
 	}
 
 	var operators []InstalledOperator
-	for _, op := range byPackage {
-		operators = append(operators, *op)
+	for pkgName, resources := range resourcesByPkg {
+		best := bestMetadataResource(resources)
+		annotations := best.GetAnnotations()
+
+		op := InstalledOperator{
+			PackageName: pkgName,
+			Version:     annotations[AnnVersion],
+			Channel:     annotations[AnnChannel],
+			BundleName:  annotations[AnnBundle],
+			BundleImage: annotations[AnnBundleImage],
+			CatalogRef:  annotations[AnnCatalog],
+		}
+
+		for _, r := range resources {
+			gvk := r.GroupVersionKind()
+			op.Resources = append(op.Resources, ResourceInfo{
+				Group:     gvk.Group,
+				Version:   gvk.Version,
+				Kind:      gvk.Kind,
+				Name:      r.GetName(),
+				Namespace: r.GetNamespace(),
+			})
+		}
+
+		op.Warning = detectInconsistencies(resources, op.Version, op.Channel)
+		operators = append(operators, op)
 	}
 	return operators, nil
 }
@@ -301,6 +315,60 @@ func supportsVerb(verbs metav1.Verbs, verb string) bool {
 
 func containsSlash(s string) bool {
 	return strings.Contains(s, "/")
+}
+
+// kindPriority returns a priority value for a resource kind when selecting the
+// most authoritative source for installed operator metadata. Lower is better.
+func kindPriority(kind string) int {
+	switch kind {
+	case "Deployment":
+		return 0
+	case "CustomResourceDefinition":
+		return 1
+	case "ClusterRole", "ClusterRoleBinding":
+		return 2
+	case "ServiceAccount", "Role", "RoleBinding":
+		return 3
+	default:
+		return 4
+	}
+}
+
+// bestMetadataResource returns the resource with the highest-priority kind for
+// reading installed operator annotations. Deployments are preferred because they
+// are most likely to have correct, up-to-date annotations.
+func bestMetadataResource(resources []unstructured.Unstructured) *unstructured.Unstructured {
+	best := &resources[0]
+	bestPri := kindPriority(best.GetKind())
+	for i := 1; i < len(resources); i++ {
+		pri := kindPriority(resources[i].GetKind())
+		if pri < bestPri {
+			best = &resources[i]
+			bestPri = pri
+		}
+	}
+	return best
+}
+
+// detectInconsistencies checks whether all resources for a package agree on
+// version and channel annotations. Returns a warning string if they differ.
+func detectInconsistencies(resources []unstructured.Unstructured, expectedVersion, expectedChannel string) string {
+	var mismatched []string
+	for _, r := range resources {
+		ann := r.GetAnnotations()
+		v := ann[AnnVersion]
+		ch := ann[AnnChannel]
+		if v != "" && v != expectedVersion {
+			mismatched = append(mismatched, fmt.Sprintf("%s/%s has version %q", r.GetKind(), r.GetName(), v))
+		}
+		if ch != "" && ch != expectedChannel {
+			mismatched = append(mismatched, fmt.Sprintf("%s/%s has channel %q", r.GetKind(), r.GetName(), ch))
+		}
+	}
+	if len(mismatched) > 0 {
+		return fmt.Sprintf("inconsistent annotations detected (%d resource(s) differ); state may be stale from a partial uninstall or failed upgrade", len(mismatched))
+	}
+	return ""
 }
 
 // TrackingLabels returns the labels to apply to resources for a given package.

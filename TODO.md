@@ -89,25 +89,27 @@ Technical gaps and improvements identified from codebase analysis.
   - Add `--max-size` to cap total cache size
   - Consider automatic cleanup of unused bundles after uninstall
 
-### 14. No shell completion support
-- **Problem**: No tab-completion for package names, channels, versions, or subcommands.
-- **Files**: `cmd/root.go`
-- **Work**: Add cobra's built-in completion generation (`rootCmd.GenBashCompletion`, `GenZshCompletion`, `GenFishCompletion`) and register `ValidArgsFunction` on subcommands that take package names
+### ~~14. No shell completion support~~ DONE
+- Added `ValidArgsFunction` on `install`, `generate` (catalog package names), `upgrade`, `uninstall`, `status` (installed package names)
+- Registered `RegisterFlagCompletionFunc` for `--catalog-type`, `--cluster-type`, and `--install-mode` with static value lists
+- Cobra's built-in `completion` command provides `bash`, `zsh`, `fish`, and `powershell` generation
 
-### 15. Error messages don't suggest next steps
-- **Problem**: Errors like "package not found" or "channel not found" don't suggest what the user should do (e.g., "run `kubectl catalog search` to find available packages").
-- **Files**: Various `cmd/*.go`
-- **Work**: Add contextual hints to common error messages
+### ~~15. Error messages don't suggest next steps~~ DONE
+- Added `withHint()` helper that appends `\nHint: ...` to error messages
+- Hints added to: package not found, channel not found, not installed, no upgrade available, --ocp-version required, --pull-secret required
+- Each hint suggests the relevant `kubectl catalog` command to run
 
-### 16. `list --installed` shows stale data after partial uninstall
-- **Problem**: If an uninstall partially fails, some resources still have tracking labels. `ListInstalled()` picks metadata from the first resource found, which may have outdated annotations.
-- **Files**: `internal/state/manager.go`
-- **Work**: Cross-reference all resources for a package and report inconsistencies, or prefer Deployment/CRD annotations over RBAC annotations
+### ~~16. `list --installed` shows stale data after partial uninstall~~ DONE
+- Added `bestMetadataResource()` — selects annotations from the most authoritative resource type (Deployment > CRD > ClusterRole > ServiceAccount > other)
+- Added `detectInconsistencies()` — checks all resources for version/channel annotation mismatches
+- Added `Warning` field to `InstalledOperator`; displayed in `list --installed` output
+- Both `GetInstalled()` and `ListInstalled()` use priority-based selection
 
-### 17. Multi-document YAML not supported in bundle manifests
-- **Problem**: `bundle.Extract()` reads each file as a single YAML document. If a bundle contains multi-document YAML files (separated by `---`), only the first document is parsed.
-- **Files**: `internal/bundle/extract.go`
-- **Work**: Use a streaming YAML decoder (like `gopkg.in/yaml.v3` Decoder) to handle `---` separators, similar to how `catalog/loader.go` handles multi-document YAML
+### ~~17. Multi-document YAML not supported in bundle manifests~~ DONE
+- Added `splitYAMLDocuments()` that splits on `\n---` boundaries
+- Empty documents and comment-only documents are skipped
+- `Extract()` now iterates over all documents in each file
+- Error messages include the document index for easier debugging
 
 ### ~~18. `push` command Argo CD template uses wrong OCI URL format~~ DONE
 - `push` command removed; OCI push functionality unified into `generate --output oci://...`

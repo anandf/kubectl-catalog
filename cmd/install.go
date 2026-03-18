@@ -91,7 +91,10 @@ If the operator is already installed, use --force to re-install.`,
 		res := resolver.New(fbc)
 		installPlan, err := res.Resolve(packageName, installChannel, installVersion)
 		if err != nil {
-			return fmt.Errorf("failed to resolve %q: %w", packageName, err)
+			return withHint(
+				fmt.Errorf("failed to resolve %q: %w", packageName, err),
+				"run 'kubectl catalog search <keyword>' to find available packages, or 'kubectl catalog list --show-channels' to see channels and versions",
+			)
 		}
 
 		fmt.Printf("Resolved install plan: %d bundle(s) to install\n", len(installPlan.Bundles))
@@ -311,5 +314,6 @@ func init() {
 	installCmd.Flags().BoolVar(&installForce, "force", false, "force re-install if already installed")
 	installCmd.Flags().StringVar(&installMode, "install-mode", "", "install mode: AllNamespaces, SingleNamespace, OwnNamespace (defaults to operator's preferred mode)")
 	installCmd.Flags().StringVar(&installEnv, "env", "", "comma-separated environment variables to inject into operator containers (e.g. KEY1=val1,KEY2=val2)")
+	installCmd.ValidArgsFunction = completeCatalogPackages
 	rootCmd.AddCommand(installCmd)
 }
