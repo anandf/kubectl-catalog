@@ -11,6 +11,8 @@ kubectl catalog generate my-operator -o oci://quay.io/myorg/my-operator --push-s
 kubectl catalog apply ./cluster-logging-manifests
 kubectl catalog apply oci://quay.io/myorg/my-operator:stable-v6.1
 kubectl catalog list --installed
+kubectl catalog status cluster-logging
+kubectl catalog upgrade cluster-logging --diff
 kubectl catalog upgrade cluster-logging
 kubectl catalog uninstall cluster-logging
 kubectl catalog clean
@@ -296,9 +298,42 @@ cluster-logging         5.8.1     stable    12          registry.example.com/cat
 elasticsearch-operator  5.8.0     stable    8           registry.example.com/catalog:v4.20
 ```
 
-### 6. Upgrade an operator
+### 6. Check operator health
 
 ```bash
+# Show deployment status, pod health, and CRD readiness
+kubectl catalog status cluster-logging
+
+# Include recent events in the operator's namespace
+kubectl catalog status cluster-logging --show-events
+```
+
+Output:
+```
+Package:   cluster-logging
+Version:   5.8.1
+Channel:   stable
+Catalog:   registry.example.com/catalog:v4.20
+Namespace: openshift-logging
+Resources: 12 total (3 ClusterRole, 2 CRD, 1 Deployment, ...)
+
+DEPLOYMENTS:
+  cluster-logging-operator                 1/1 ready, 1 updated, 1 available  [Ready]
+
+PODS:
+  cluster-logging-operator-7f9b8c4d-x2k9j  Running              1/1 ready  0 restarts  2d
+
+CRDs:
+  clusterlogforwarders.logging.openshift.io            [Established]
+  clusterloggings.logging.openshift.io                 [Established]
+```
+
+### 7. Upgrade an operator
+
+```bash
+# Preview what will change before upgrading
+kubectl catalog upgrade cluster-logging --ocp-version 4.20 --diff --pull-secret ~/pull-secret.json
+
 # Upgrade to the latest version in the current channel
 kubectl catalog upgrade cluster-logging --ocp-version 4.20 --pull-secret ~/pull-secret.json
 
@@ -306,7 +341,7 @@ kubectl catalog upgrade cluster-logging --ocp-version 4.20 --pull-secret ~/pull-
 kubectl catalog upgrade cluster-logging --ocp-version 4.20 --channel stable-6.0 --pull-secret ~/pull-secret.json
 ```
 
-### 7. Uninstall an operator
+### 8. Uninstall an operator
 
 ```bash
 # Uninstall (preserves CRDs and custom resources by default)
@@ -316,7 +351,7 @@ kubectl catalog uninstall cluster-logging
 kubectl catalog uninstall cluster-logging --force
 ```
 
-### 8. Check version
+### 9. Check version
 
 ```bash
 kubectl catalog version
@@ -375,6 +410,7 @@ kubectl catalog clean --bundles
 | `--channel` | Channel to install from or switch to during upgrade |
 | `--version` | Specific version to install/generate (install and generate only) |
 | `--env` | Comma-separated environment variables to inject into all operator containers (e.g. `KEY1=val1,KEY2=val2`). Mirrors OLM Subscription `spec.config.env`. |
+| `--diff` | Show diff of current vs new manifests without applying (upgrade only) |
 | `--force` | Force re-install if already installed (install only) |
 | `-o, --output` | Output destination: local directory or `oci://` registry reference (generate only; defaults to `./<package-name>-manifests`). When using `oci://`, if no tag is specified, the resolved channel name or `v<version>` is used automatically. |
 | `--push-secret` | Path to a credentials file for OCI push authentication (generate only; used with `oci://` output) |
@@ -642,7 +678,8 @@ The pull secret is a standard Docker config JSON file:
 │   ├── install.go             # Install with dependency resolution
 │   ├── generate.go            # Generate manifests to directory or OCI registry
 │   ├── apply.go               # Apply manifests from local directory or OCI artifact
-│   ├── upgrade.go             # Upgrade via channel upgrade graph
+│   ├── upgrade.go             # Upgrade via channel upgrade graph (--diff preview)
+│   ├── status.go              # Operator health: deployments, pods, CRDs, events
 │   ├── uninstall.go           # Uninstall with CRD/CR protection
 │   ├── clean.go               # Cache cleanup
 │   └── version.go             # Version and build info

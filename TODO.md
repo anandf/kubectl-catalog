@@ -64,15 +64,22 @@ Technical gaps and improvements identified from codebase analysis.
 
 ## Low Priority
 
-### 11. No `status` command
-- **Problem**: There's no way to check the health of an installed operator (deployment readiness, pod status, recent events) without using raw kubectl commands.
-- **Files**: New `cmd/status.go`
-- **Work**: Add `kubectl catalog status <package-name>` that shows deployment status, pod health, recent events, and CRD readiness
+### ~~11. No `status` command~~ DONE
+- Added `cmd/status.go` with `kubectl catalog status <package-name>`
+- Shows installed version, channel, catalog reference, namespace, resource counts
+- Deployment status with ready/updated/available replicas and condition checks
+- Pod health with phase, container readiness, restart counts, crash loop detection
+- CRD status (Established / NotEstablished)
+- Optional `--show-events` flag for recent events (last hour, max 10)
+- Pod discovery falls back to ReplicaSet owner reference matching when labels are missing
 
-### 12. No `diff` before upgrade
-- **Problem**: `upgrade` applies the new bundle without showing what will change. Users have no way to preview the diff between current and target versions.
-- **Files**: `cmd/upgrade.go`
-- **Work**: Add `--diff` flag that shows a diff of current vs new manifests before applying (similar to `kubectl diff`)
+### ~~12. No `diff` before upgrade~~ DONE
+- Added `--diff` flag to `upgrade` command
+- `showUpgradeDiff()` compares current cluster resources with new bundle manifests
+- Categorizes resources as added (+), removed (-), changed (~), or unchanged
+- `resourceDiffers()` compares spec/data/rules/roleRef/subjects/webhooks fields via YAML serialization
+- Also compares tracking annotations and container images in Deployments
+- Exits without applying when `--diff` is set
 
 ### 13. Cache has no expiry or size management
 - **Problem**: Cached catalogs and bundles grow indefinitely. `clean` removes everything but there's no TTL-based expiry or size limit.

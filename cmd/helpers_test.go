@@ -632,6 +632,123 @@ func TestClassifyResource_TLSSecret(t *testing.T) {
 	}
 }
 
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		input  string
+		maxLen int
+		want   string
+	}{
+		{"short", 10, "short"},
+		{"exactly10!", 10, "exactly10!"},
+		{"this is a long string", 10, "this is..."},
+		{"", 5, ""},
+		{"abc", 3, "abc"},
+		{"abcd", 3, "..."},
+	}
+
+	for _, tt := range tests {
+		got := truncate(tt.input, tt.maxLen)
+		if got != tt.want {
+			t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+		}
+	}
+}
+
+func TestResourceDiffers(t *testing.T) {
+	makeDeployment := func(name, image, version string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]interface{}{
+					"name": name,
+					"annotations": map[string]interface{}{
+						"kubectl-catalog.io/version": version,
+					},
+				},
+				"spec": map[string]interface{}{
+					"replicas": int64(1),
+					"template": map[string]interface{}{
+						"spec": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"name":  "operator",
+									"image": image,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("same resources", func(t *testing.T) {
+		a := makeDeployment("my-op", "img:v1", "1.0.0")
+		b := makeDeployment("my-op", "img:v1", "1.0.0")
+		if resourceDiffers(a, b) {
+			t.Error("identical resources should not differ")
+		}
+	})
+
+	t.Run("different image", func(t *testing.T) {
+		a := makeDeployment("my-op", "img:v1", "1.0.0")
+		b := makeDeployment("my-op", "img:v2", "1.0.0")
+		if !resourceDiffers(a, b) {
+			t.Error("different images should differ")
+		}
+	})
+
+	t.Run("different version annotation", func(t *testing.T) {
+		a := makeDeployment("my-op", "img:v1", "1.0.0")
+		b := makeDeployment("my-op", "img:v1", "2.0.0")
+		if !resourceDiffers(a, b) {
+			t.Error("different version annotations should differ")
+		}
+	})
+
+	t.Run("different spec", func(t *testing.T) {
+		a := makeDeployment("my-op", "img:v1", "1.0.0")
+		b := makeDeployment("my-op", "img:v1", "1.0.0")
+		unstructured.SetNestedField(b.Object, int64(3), "spec", "replicas")
+		if !resourceDiffers(a, b) {
+			t.Error("different spec should differ")
+		}
+	})
+
+	t.Run("non-deployment same spec", func(t *testing.T) {
+		a := &unstructured.Unstructured{Object: map[string]interface{}{
+			"kind":     "ConfigMap",
+			"metadata": map[string]interface{}{"name": "cm"},
+			"data":     map[string]interface{}{"key": "val"},
+		}}
+		b := &unstructured.Unstructured{Object: map[string]interface{}{
+			"kind":     "ConfigMap",
+			"metadata": map[string]interface{}{"name": "cm"},
+			"data":     map[string]interface{}{"key": "val"},
+		}}
+		if resourceDiffers(a, b) {
+			t.Error("identical ConfigMaps should not differ")
+		}
+	})
+
+	t.Run("non-deployment different data", func(t *testing.T) {
+		a := &unstructured.Unstructured{Object: map[string]interface{}{
+			"kind":     "ConfigMap",
+			"metadata": map[string]interface{}{"name": "cm"},
+			"data":     map[string]interface{}{"key": "val1"},
+		}}
+		b := &unstructured.Unstructured{Object: map[string]interface{}{
+			"kind":     "ConfigMap",
+			"metadata": map[string]interface{}{"name": "cm"},
+			"data":     map[string]interface{}{"key": "val2"},
+		}}
+		if !resourceDiffers(a, b) {
+			t.Error("different ConfigMap data should differ")
+		}
+	})
+}
+
 func TestIsOCIOutput(t *testing.T) {
 	tests := []struct {
 		input string

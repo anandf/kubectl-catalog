@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/anandf/kubectl-catalog/internal/applier"
 	"github.com/anandf/kubectl-catalog/internal/bundle"
@@ -11,12 +13,15 @@ import (
 	"github.com/anandf/kubectl-catalog/internal/resolver"
 	"github.com/anandf/kubectl-catalog/internal/state"
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/yaml"
 )
 
 var (
 	upgradeChannel string
 	upgradeMode    string
 	upgradeEnv     string
+	upgradeDiff    bool
 )
 
 var upgradeCmd = &cobra.Command{
@@ -26,6 +31,9 @@ var upgradeCmd = &cobra.Command{
 The current installed version is discovered from resource annotations in the cluster.
 The target version is the channel head — the bundle that the upgrade graph resolves to.
 Only the target bundle is applied (intermediate versions are skipped).
+
+Use --diff to preview what will change before applying. This shows a diff of current
+vs new manifests without making any changes to the cluster.
 
 The catalog is resolved from --ocp-version or --catalog. If neither is specified,
 the catalog reference stored in the installed resource annotations is used.`,
@@ -255,6 +263,18 @@ the catalog reference stored in the installed resource annotations is used.`,
 			}
 		}
 
+		// If --diff is set, show what would change and exit without applying
+		if upgradeDiff {
+			fmt.Println("\n--- Diff: current vs upgrade ---")
+			currentResources, resErr := stateManager.ResourcesForPackage(ctx, packageName)
+			if resErr != nil {
+				fmt.Printf("  Warning: could not fetch current resources: %v\n", resErr)
+			}
+			showUpgradeDiff(currentResources, manifests)
+			fmt.Println("\nNo changes applied (--diff mode)")
+			return nil
+		}
+
 		if err := k8sApplier.Apply(ctx, manifests, ic); err != nil {
 			return fmt.Errorf("failed to apply bundle %q: %w", target.Name, err)
 		}
@@ -272,9 +292,159 @@ the catalog reference stored in the installed resource annotations is used.`,
 	},
 }
 
+// showUpgradeDiff compares current cluster resources with the new bundle manifests
+// and prints a summary of additions, removals, and changes.
+func showUpgradeDiff(currentResources []unstructured.Unstructured, newManifests *bundle.Manifests) {
+	// Build maps by kind/name for comparison
+	type resourceKey struct {
+		kind string
+		name string
+	}
+
+	currentByKey := make(map[resourceKey]*unstructured.Unstructured)
+	for i := range currentResources {
+		r := &currentResources[i]
+		key := resourceKey{kind: r.GetKind(), name: r.GetName()}
+		currentByKey[key] = r
+	}
+
+	newResources := newManifests.AllResources()
+	newByKey := make(map[resourceKey]*unstructured.Unstructured)
+	for _, r := range newResources {
+		key := resourceKey{kind: r.GetKind(), name: r.GetName()}
+		newByKey[key] = r
+	}
+
+	// Find additions and changes
+	var added, changed, unchanged []string
+	for key, newRes := range newByKey {
+		label := fmt.Sprintf("%s/%s", key.kind, key.name)
+		currentRes, exists := currentByKey[key]
+		if !exists {
+			added = append(added, label)
+			continue
+		}
+
+		// Compare YAML representations (strip metadata that changes between versions)
+		if resourceDiffers(currentRes, newRes) {
+			changed = append(changed, label)
+		} else {
+			unchanged = append(unchanged, label)
+		}
+	}
+
+	// Find removals
+	var removed []string
+	for key := range currentByKey {
+		if _, exists := newByKey[key]; !exists {
+			removed = append(removed, fmt.Sprintf("%s/%s", key.kind, key.name))
+		}
+	}
+
+	// Sort for stable output
+	sortStrings(added, changed, removed, unchanged)
+
+	if len(added) > 0 {
+		fmt.Printf("\n  Added (%d):\n", len(added))
+		for _, r := range added {
+			fmt.Printf("    + %s\n", r)
+		}
+	}
+
+	if len(removed) > 0 {
+		fmt.Printf("\n  Removed (%d):\n", len(removed))
+		for _, r := range removed {
+			fmt.Printf("    - %s\n", r)
+		}
+	}
+
+	if len(changed) > 0 {
+		fmt.Printf("\n  Changed (%d):\n", len(changed))
+		for _, r := range changed {
+			fmt.Printf("    ~ %s\n", r)
+		}
+	}
+
+	if len(unchanged) > 0 {
+		fmt.Printf("\n  Unchanged (%d):\n", len(unchanged))
+		for _, r := range unchanged {
+			fmt.Printf("      %s\n", r)
+		}
+	}
+
+	fmt.Printf("\nSummary: %d added, %d removed, %d changed, %d unchanged\n",
+		len(added), len(removed), len(changed), len(unchanged))
+}
+
+// resourceDiffers compares two resources by their spec content, ignoring
+// metadata fields that naturally differ (resourceVersion, uid, timestamps, etc.).
+func resourceDiffers(current, new *unstructured.Unstructured) bool {
+	// Compare the spec/data/rules sections — the parts that actually matter
+	fieldsToCompare := []string{"spec", "data", "rules", "roleRef", "subjects", "webhooks"}
+
+	for _, field := range fieldsToCompare {
+		currentVal, currentFound := current.Object[field]
+		newVal, newFound := new.Object[field]
+		if currentFound != newFound {
+			return true
+		}
+		if !currentFound {
+			continue
+		}
+		currentYAML, _ := yaml.Marshal(currentVal)
+		newYAML, _ := yaml.Marshal(newVal)
+		if string(currentYAML) != string(newYAML) {
+			return true
+		}
+	}
+
+	// Also compare annotations that we care about (version, channel, etc.)
+	currentAnn := current.GetAnnotations()
+	newAnn := new.GetAnnotations()
+	for _, key := range []string{state.AnnVersion, state.AnnChannel, state.AnnBundle, state.AnnBundleImage} {
+		if currentAnn[key] != newAnn[key] {
+			return true
+		}
+	}
+
+	// Compare container images in deployments
+	if current.GetKind() == "Deployment" {
+		currentImages := extractContainerImages(current)
+		newImages := extractContainerImages(new)
+		if strings.Join(currentImages, ",") != strings.Join(newImages, ",") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// extractContainerImages returns a sorted list of container images from a Deployment.
+func extractContainerImages(dep *unstructured.Unstructured) []string {
+	containers, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+	var images []string
+	for _, c := range containers {
+		cMap, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if img, ok := cMap["image"].(string); ok {
+			images = append(images, img)
+		}
+	}
+	return images
+}
+
+func sortStrings(slices ...[]string) {
+	for _, s := range slices {
+		sort.Strings(s)
+	}
+}
+
 func init() {
 	upgradeCmd.Flags().StringVar(&upgradeChannel, "channel", "", "switch to a different channel for upgrade")
 	upgradeCmd.Flags().StringVar(&upgradeMode, "install-mode", "", "install mode: AllNamespaces, SingleNamespace, OwnNamespace (defaults to operator's preferred mode)")
 	upgradeCmd.Flags().StringVar(&upgradeEnv, "env", "", "comma-separated environment variables to inject into operator containers (e.g. KEY1=val1,KEY2=val2)")
+	upgradeCmd.Flags().BoolVar(&upgradeDiff, "diff", false, "show diff of current vs new manifests without applying")
 	rootCmd.AddCommand(upgradeCmd)
 }
