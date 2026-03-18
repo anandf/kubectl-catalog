@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/anandf/kubectl-catalog/internal/applier"
 	"github.com/anandf/kubectl-catalog/internal/bundle"
+	"github.com/anandf/kubectl-catalog/internal/registry"
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
@@ -18,23 +20,36 @@ import (
 var applyEnv string
 
 var applyCmd = &cobra.Command{
-	Use:   "apply <directory>",
+	Use:   "apply <source>",
 	Short: "Apply previously generated manifests to the cluster",
 	Long: `Apply operator manifests that were generated with "kubectl catalog generate".
 
-This reads YAML files from the given directory, classifies them by resource type,
+The <source> can be:
+  - A local directory:   kubectl catalog apply ./my-manifests
+  - An OCI reference:    kubectl catalog apply oci://quay.io/myorg/my-operator:v1.2
+
+This reads YAML files from the source, classifies them by resource type,
 and applies them using the same phased strategy as "kubectl catalog install":
 CRDs first, then RBAC, Deployments, Services, and other resources.
 
-The directory must contain a _metadata.yaml file created by the generate command.`,
+The source must contain a _metadata.yaml file created by the generate command.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		manifestDir := args[0]
+		source := args[0]
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
 		if dryRun {
 			fmt.Println("Running in dry-run mode — no changes will be made to the cluster")
+		}
+
+		// Resolve source: local directory or OCI artifact
+		manifestDir, cleanupDir, err := resolveApplySource(ctx, source)
+		if err != nil {
+			return err
+		}
+		if cleanupDir != "" {
+			defer os.RemoveAll(cleanupDir)
 		}
 
 		// Read metadata
@@ -243,6 +258,31 @@ func hasAnnotation(obj *unstructured.Unstructured, key string) bool {
 	}
 	_, ok := annotations[key]
 	return ok
+}
+
+// resolveApplySource resolves the source argument to a local directory path.
+// If the source is an oci:// reference, it pulls the artifact to a temp directory.
+// Returns the manifest directory path and a cleanup path (empty if no cleanup needed).
+func resolveApplySource(ctx context.Context, source string) (manifestDir string, cleanupDir string, err error) {
+	if !strings.HasPrefix(source, "oci://") {
+		return source, "", nil
+	}
+
+	ociRef := strings.TrimPrefix(source, "oci://")
+	fmt.Printf("Pulling OCI artifact %s...\n", ociRef)
+
+	tmpDir, err := os.MkdirTemp("", "kubectl-catalog-apply-*")
+	if err != nil {
+		return "", "", fmt.Errorf("creating temp directory: %w", err)
+	}
+
+	puller := registry.NewImagePuller(cacheDir)
+	if err := puller.PullArtifact(ctx, ociRef, tmpDir); err != nil {
+		os.RemoveAll(tmpDir)
+		return "", "", fmt.Errorf("failed to pull OCI artifact: %w", err)
+	}
+
+	return tmpDir, tmpDir, nil
 }
 
 func init() {

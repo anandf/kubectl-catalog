@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/anandf/kubectl-catalog/internal/bundle"
 	"github.com/anandf/kubectl-catalog/internal/catalog"
 	"github.com/anandf/kubectl-catalog/internal/certs"
+	"github.com/anandf/kubectl-catalog/internal/registry"
 	"github.com/anandf/kubectl-catalog/internal/resolver"
 	"github.com/anandf/kubectl-catalog/internal/state"
 	"github.com/spf13/cobra"
@@ -19,11 +21,12 @@ import (
 )
 
 var (
-	generateChannel string
-	generateVersion string
-	generateMode    string
-	generateOutput  string
-	generateEnv     string
+	generateChannel    string
+	generateVersion    string
+	generateMode       string
+	generateOutput     string
+	generateEnv        string
+	generatePushSecret string
 )
 
 // generateMetadata holds the install context written alongside generated manifests.
@@ -47,7 +50,15 @@ var generateCmd = &cobra.Command{
 
 This resolves the bundle, extracts manifests, applies all transformations
 (namespace, install mode, WATCH_NAMESPACE, serving certs), and writes the
-final YAML files to an output directory for inspection and modification.
+final YAML files to an output destination.
+
+Output destination (--output / -o):
+  Local directory (default):  -o ./my-manifests  or omit for ./<package>-manifests/
+  OCI registry:               -o oci://quay.io/myorg/my-operator:v1.2
+
+When pushing to an OCI registry, the artifact uses a single layer with media type
+application/vnd.oci.image.layer.v1.tar+gzip, compatible with Argo CD and FluxCD.
+Use --push-secret for registry authentication when pushing.
 
 Supports all the same flags as "kubectl catalog install":
   --ocp-version      OCP version to derive the catalog image
@@ -59,36 +70,33 @@ Supports all the same flags as "kubectl catalog install":
   --channel          Channel to install from
   --version          Specific version to generate
   --env              Comma-separated env vars to inject (e.g. KEY1=val1,KEY2=val2)
-  --pull-secret      Path to a pull secret file for registry authentication
+  --pull-secret      Path to a pull secret file for source registry authentication
+  --push-secret      Path to a credentials file for OCI push authentication
   --cache-dir        Directory for caching catalog and bundle images
   --refresh          Force re-pull of cached catalog images
 
 On vanilla Kubernetes (--cluster-type k8s), self-signed TLS serving certificates
 are generated for services that use the OpenShift serving-cert annotation.
 
-Use "kubectl catalog apply <directory>" to apply the generated manifests, or
-"kubectl catalog push <directory> <image-ref>" to publish as an OCI artifact
-for Argo CD / FluxCD.
+Use "kubectl catalog apply <source>" to apply the generated manifests.
+The <source> can be a local directory or an oci:// reference.
 
 Examples:
-  # Generate from Red Hat catalog (pull secret required)
+  # Generate to local directory (default)
   kubectl catalog generate cluster-logging --ocp-version 4.20 --pull-secret ~/ps.json
-
-  # Generate from community catalog for vanilla k8s
-  kubectl catalog generate my-operator --ocp-version 4.20 --catalog-type community \
-    --cluster-type k8s --pull-secret ~/ps.json
-
-  # Generate from OperatorHub.io (no pull secret needed)
-  kubectl catalog generate prometheus --catalog-type operatorhub
-
-  # Generate a specific version in single-namespace mode
-  kubectl catalog generate my-operator --ocp-version 4.20 --version 1.2.3 \
-    --install-mode SingleNamespace -n my-namespace --pull-secret ~/ps.json
 
   # Generate to a custom output directory
   kubectl catalog generate my-operator --ocp-version 4.20 -o /tmp/manifests --pull-secret ~/ps.json
 
-  # Generate with custom environment variables injected into operator containers
+  # Generate and push directly to an OCI registry
+  kubectl catalog generate my-operator --ocp-version 4.20 \
+    -o oci://quay.io/myorg/my-operator:v1.2 \
+    --pull-secret ~/ps.json --push-secret ~/push-creds.json
+
+  # Generate from OperatorHub.io (no pull secret needed)
+  kubectl catalog generate prometheus --catalog-type operatorhub
+
+  # Generate with custom environment variables
   kubectl catalog generate my-operator --ocp-version 4.20 \
     --env "DISABLE_WEBHOOKS=true,LOG_LEVEL=debug" --pull-secret ~/ps.json`,
 	Args: cobra.ExactArgs(1),
@@ -135,7 +143,24 @@ Examples:
 			fmt.Printf("  - %s v%s (from %s)\n", b.Name, b.Version, b.Image)
 		}
 
+		isOCI := isOCIOutput(generateOutput)
 		namespaceExplicit := cmd.Flags().Changed("namespace")
+
+		// For OCI output, write to a temp directory first, then push
+		outputDir := generateOutput
+		if isOCI {
+			tmpDir, err := os.MkdirTemp("", "kubectl-catalog-generate-*")
+			if err != nil {
+				return fmt.Errorf("creating temp directory: %w", err)
+			}
+			defer os.RemoveAll(tmpDir)
+			outputDir = tmpDir
+		} else if outputDir == "" {
+			safePkg := filepath.Base(packageName)
+			outputDir = filepath.Join(".", fmt.Sprintf("%s-manifests", safePkg))
+		}
+
+		var lastMeta *generateMetadata
 
 		for _, b := range installPlan.Bundles {
 			bundleDir, err := puller.PullBundle(ctx, b.Image)
@@ -186,12 +211,6 @@ Examples:
 				setSubjectNamespaces(obj, targetNamespace)
 			}
 
-			// Determine output directory
-			outputDir := generateOutput
-			if outputDir == "" {
-				safePkg := filepath.Base(packageName)
-				outputDir = filepath.Join(".", fmt.Sprintf("%s-manifests", safePkg))
-			}
 			// For multi-bundle plans, put each bundle in a subdirectory
 			bundleOutputDir := outputDir
 			if len(installPlan.Bundles) > 1 {
@@ -210,17 +229,158 @@ Examples:
 				}
 			}
 
-			fmt.Printf("\nManifests written to %s\n", bundleOutputDir)
+			lastMeta = &generateMetadata{
+				PackageName: b.Package,
+				Version:     b.Version,
+				Channel:     b.Channel,
+				BundleName:  b.Name,
+				BundleImage: b.Image,
+				CatalogRef:  catalogImage,
+				Namespace:   targetNamespace,
+				ClusterType: clusterType,
+				InstallMode: mode,
+			}
+
+			if !isOCI {
+				fmt.Printf("\nManifests written to %s\n", bundleOutputDir)
+			}
 		}
 
-		fmt.Printf("\nReview the generated manifests, then apply with:\n")
-		printDir := generateOutput
-		if printDir == "" {
-			printDir = filepath.Join(".", fmt.Sprintf("%s-manifests", packageName))
+		// Push to OCI registry if output is oci://
+		if isOCI {
+			ociRef := strings.TrimPrefix(generateOutput, "oci://")
+			if err := pushToOCI(ctx, outputDir, ociRef, lastMeta); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("\nReview the generated manifests, then apply with:\n")
+			fmt.Printf("  kubectl catalog apply %s\n", outputDir)
 		}
-		fmt.Printf("  kubectl catalog apply %s\n", printDir)
+
 		return nil
 	},
+}
+
+// isOCIOutput returns true if the output destination is an OCI registry reference.
+func isOCIOutput(output string) bool {
+	return strings.HasPrefix(output, "oci://")
+}
+
+// pushToOCI packages the manifest directory as an OCI artifact and pushes it.
+func pushToOCI(ctx context.Context, manifestDir, imageRef string, meta *generateMetadata) error {
+	// Create a pusher with push-secret credentials if provided
+	var pusher *registry.ImagePuller
+	var err error
+	if generatePushSecret != "" {
+		pusher, err = registry.NewImagePullerWithPullSecret(cacheDir, generatePushSecret)
+		if err != nil {
+			return fmt.Errorf("failed to create OCI pusher with push-secret: %w", err)
+		}
+	} else {
+		pusher = registry.NewImagePuller(cacheDir)
+	}
+
+	// Count files being pushed
+	fileCount := 0
+	if walkErr := filepath.Walk(manifestDir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info != nil && !info.IsDir() {
+			fileCount++
+		}
+		return nil
+	}); walkErr != nil {
+		return fmt.Errorf("scanning manifest directory: %w", walkErr)
+	}
+
+	fmt.Printf("\nPushing %d file(s) to %s...\n", fileCount, imageRef)
+
+	ociAnnotations := map[string]string{
+		"org.opencontainers.image.title":   meta.PackageName,
+		"org.opencontainers.image.version": meta.Version,
+		"org.opencontainers.image.created": time.Now().UTC().Format(time.RFC3339),
+		"org.opencontainers.image.source":  meta.CatalogRef,
+	}
+
+	if err := pusher.PushManifests(ctx, manifestDir, imageRef, ociAnnotations); err != nil {
+		return fmt.Errorf("failed to push manifests: %w", err)
+	}
+
+	fmt.Printf("\nSuccessfully pushed %s v%s to %s\n", meta.PackageName, meta.Version, imageRef)
+
+	// Split image reference into repo and tag for Argo CD / FluxCD templates
+	repo, tag := splitImageRef(imageRef)
+
+	fmt.Println("\n--- Argo CD Application ---")
+	fmt.Printf(`apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: %s
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: oci://%s
+    targetRevision: %s
+    path: .
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: %s
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+`, meta.PackageName, repo, tag, meta.Namespace)
+
+	fmt.Println("\n--- FluxCD OCIRepository + Kustomization ---")
+	fmt.Printf(`apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: OCIRepository
+metadata:
+  name: %s
+  namespace: flux-system
+spec:
+  interval: 5m
+  url: oci://%s
+  ref:
+    tag: %s
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: %s
+  namespace: flux-system
+spec:
+  interval: 5m
+  sourceRef:
+    kind: OCIRepository
+    name: %s
+  targetNamespace: %s
+  prune: true
+`, meta.PackageName, repo, tag, meta.PackageName, meta.PackageName, meta.Namespace)
+
+	fmt.Println("\n--- Pull and apply manually ---")
+	fmt.Printf("  kubectl catalog apply oci://%s\n", imageRef)
+
+	return nil
+}
+
+// splitImageRef splits an image reference into repository and tag.
+// "quay.io/org/repo:v1.2" -> ("quay.io/org/repo", "v1.2")
+func splitImageRef(ref string) (string, string) {
+	// Handle digest references
+	if idx := strings.LastIndex(ref, "@"); idx >= 0 {
+		return ref[:idx], ref[idx+1:]
+	}
+	// Handle tag references — find the last colon that's not part of a port
+	if idx := strings.LastIndex(ref, ":"); idx >= 0 {
+		// Make sure it's a tag, not a port (ports are followed by /)
+		afterColon := ref[idx+1:]
+		if !strings.Contains(afterColon, "/") {
+			return ref[:idx], afterColon
+		}
+	}
+	return ref, "latest"
 }
 
 func stampTrackingMetadata(obj *unstructured.Unstructured, labels, annotations map[string]string) {
@@ -453,7 +613,8 @@ func init() {
 	generateCmd.Flags().StringVar(&generateChannel, "channel", "", "channel to install from (defaults to package's default channel)")
 	generateCmd.Flags().StringVar(&generateVersion, "version", "", "specific version to install (defaults to channel head)")
 	generateCmd.Flags().StringVar(&generateMode, "install-mode", "", "install mode: AllNamespaces, SingleNamespace, OwnNamespace (defaults to operator's preferred mode)")
-	generateCmd.Flags().StringVarP(&generateOutput, "output", "o", "", "output directory for generated manifests (defaults to ./<package-name>-manifests)")
+	generateCmd.Flags().StringVarP(&generateOutput, "output", "o", "", "output destination: local directory or oci:// registry reference (defaults to ./<package-name>-manifests)")
 	generateCmd.Flags().StringVar(&generateEnv, "env", "", "comma-separated environment variables to inject into operator containers (e.g. KEY1=val1,KEY2=val2)")
+	generateCmd.Flags().StringVar(&generatePushSecret, "push-secret", "", "path to a credentials file for OCI push authentication (only used with oci:// output)")
 	rootCmd.AddCommand(generateCmd)
 }

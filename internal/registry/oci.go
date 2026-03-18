@@ -71,6 +71,34 @@ func (p *ImagePuller) PushManifests(ctx context.Context, dir, imageRef string, o
 	return nil
 }
 
+// PullArtifact pulls an OCI artifact and extracts its contents to a local directory.
+// This is the inverse of PushManifests — it downloads the single-layer artifact
+// and extracts the tar.gz contents.
+func (p *ImagePuller) PullArtifact(ctx context.Context, imageRef, destDir string) error {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return fmt.Errorf("parsing image reference %s: %w", imageRef, err)
+	}
+
+	fmt.Printf("  Pulling OCI artifact %s...\n", imageRef)
+
+	img, err := remote.Image(ref, remote.WithAuthFromKeychain(p.keychain), remote.WithContext(ctx))
+	if err != nil {
+		return fmt.Errorf("pulling artifact %s: %w", imageRef, err)
+	}
+
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("creating directory %s: %w", destDir, err)
+	}
+
+	if err := extractImage(img, destDir); err != nil {
+		return fmt.Errorf("extracting artifact %s: %w", imageRef, err)
+	}
+
+	fmt.Printf("  Extracted to %s\n", destDir)
+	return nil
+}
+
 // tarDirectory creates a tar archive of all files in the directory.
 // Files are stored with paths relative to the directory root.
 func tarDirectory(dir string) (io.Reader, error) {

@@ -102,10 +102,11 @@ Technical gaps and improvements identified from codebase analysis.
 - **Files**: `internal/bundle/extract.go`
 - **Work**: Use a streaming YAML decoder (like `gopkg.in/yaml.v3` Decoder) to handle `---` separators, similar to how `catalog/loader.go` handles multi-document YAML
 
-### 18. `push` command Argo CD template uses wrong OCI URL format
-- **Problem**: The Argo CD Application template uses `oci://<registry>/<repo>/<package>:<tag>` as `repoURL`, but Argo CD expects `repoURL` without the tag (tag goes in `targetRevision`). The template includes the tag in the `repoURL`.
-- **Files**: `cmd/push.go`
-- **Work**: Split the image reference so `repoURL` is `oci://<registry>/<repo>/<package>` and `targetRevision` is the tag
+### ~~18. `push` command Argo CD template uses wrong OCI URL format~~ DONE
+- `push` command removed; OCI push functionality unified into `generate --output oci://...`
+- `splitImageRef()` properly separates repository and tag for Argo CD / FluxCD templates
+- `apply` command now accepts both local directories and `oci://` references
+- Added `--push-secret` flag for OCI push authentication (separate from `--pull-secret`)
 
 ---
 
