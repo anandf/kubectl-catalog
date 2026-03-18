@@ -122,9 +122,14 @@ func newImagePuller() (*registry.ImagePuller, error) {
 }
 
 // requirePullSecretForRedHat returns an error if the catalog image is from
-// registry.redhat.io and no --pull-secret was provided.
+// registry.redhat.io and no --pull-secret was provided, unless it is the
+// community-operator-index which is publicly accessible without credentials.
 func requirePullSecretForRedHat(catalogImage string) error {
 	if strings.HasPrefix(catalogImage, "registry.redhat.io/") && pullSecretPath == "" {
+		// The community operator index is publicly accessible
+		if strings.Contains(catalogImage, "community-operator-index") {
+			return nil
+		}
 		return fmt.Errorf("--pull-secret is required when using Red Hat catalog images (registry.redhat.io)\nHint: download your pull secret from https://console.redhat.com/openshift/downloads#tool-pull-secret")
 	}
 	return nil

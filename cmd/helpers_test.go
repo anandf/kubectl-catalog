@@ -124,6 +124,18 @@ func TestRequirePullSecretForRedHat(t *testing.T) {
 			pullSecret:   "",
 			wantErr:      false,
 		},
+		{
+			name:         "community operator index without pull secret",
+			catalogImage: "registry.redhat.io/redhat/community-operator-index:v4.20",
+			pullSecret:   "",
+			wantErr:      false,
+		},
+		{
+			name:         "certified operator index without pull secret",
+			catalogImage: "registry.redhat.io/redhat/certified-operator-index:v4.20",
+			pullSecret:   "",
+			wantErr:      true,
+		},
 	}
 
 	for _, tt := range tests {

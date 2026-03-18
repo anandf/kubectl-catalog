@@ -68,7 +68,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	cacheDir, err = os.MkdirTemp("", "kubectl-catalog-e2e-cache-*")
 	Expect(err).NotTo(HaveOccurred())
 
-	// Start a local OCI registry for push tests
+	// Start a local OCI registry for generate-to-OCI tests
 	By("Starting local OCI registry")
 	startLocalRegistry()
 
@@ -139,7 +139,7 @@ func deleteKindCluster() {
 	Expect(err).NotTo(HaveOccurred(), "Failed to delete kind cluster: %s", string(output))
 }
 
-// startLocalRegistry starts a local Docker registry for push tests.
+// startLocalRegistry starts a local Docker registry for OCI generate tests.
 func startLocalRegistry() {
 	// Stop any existing registry
 	exec.Command("docker", "rm", "-f", registryName).Run()

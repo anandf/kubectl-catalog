@@ -128,7 +128,8 @@ Technical gaps and improvements identified from codebase analysis.
   - `setSubjectNamespaces()` was already tested
   - Also added: `classifyResource()`, `isOCIOutput()`, `sanitizeOCITag()`, `splitImageRef()`, `resolveOCIRef()`, `ParseGVKQuery()`, `FindGVKProviders()`
 
-### 20. E2E test suite is a skeleton
-- **Problem**: `test/e2e/e2e_test.go` exists but needs real test cases covering install, upgrade, uninstall, and generate workflows.
-- **Files**: `test/e2e/`
-- **Work**: Add e2e tests using kind/k3s that exercise the full install → verify → upgrade → uninstall lifecycle
+### ~~20. E2E test suite is a skeleton~~ DONE
+- Rewrote E2E suite to use `community` catalog (`registry.redhat.io/redhat/community-operator-index:v4.20`) which is publicly accessible without a pull secret
+- Test operator: `argocd-operator` (bundle images on quay.io, no auth required)
+- Coverage: help, version, completion (bash/zsh/fish), search (keyword + GVK), list (available + installed + channels), generate (basic + channel + namespace + install mode + error), generate-to-OCI (push + auto-tag + registry verify), apply, install/uninstall lifecycle (idempotency + --force + SingleNamespace), status (basic + --show-events + error hint), upgrade (basic + --diff), error handling and hints, clean
+- Suite setup: kind cluster + local Docker registry for OCI tests

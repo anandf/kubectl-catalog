@@ -11,22 +11,41 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// These tests use the OperatorHub.io catalog (--catalog-type operatorhub)
-// which is publicly accessible and doesn't require a pull secret.
-// The catalog is large (~200MB), so the first run may be slow.
-// Subsequent runs use the local cache.
+// These tests use the community operator catalog from registry.redhat.io
+// (--catalog-type community --ocp-version 4.20) which is publicly accessible
+// without a pull secret. Operator bundle images are hosted on quay.io.
+//
+// The test operator is argocd-operator, chosen because:
+//   - It is available in the community catalog
+//   - Its bundle images are on quay.io (no auth required)
+//   - It supports multiple install modes and channels
+
+const (
+	testCatalogType = "community"
+	testOCPVersion  = "4.20"
+	testOperator    = "argocd-operator"
+	testClusterType = "k8s"
+)
+
+// catalogFlags returns the standard catalog flags for all tests.
+func catalogFlags() []string {
+	return []string{
+		"--catalog-type", testCatalogType,
+		"--ocp-version", testOCPVersion,
+		"--cluster-type", testClusterType,
+	}
+}
 
 var _ = Describe("kubectl-catalog E2E", func() {
 
 	Describe("help and basic commands", func() {
-		It("should display help", func() {
+		It("should display help with all subcommands", func() {
 			stdout, _, err := runBinary("--help")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(stdout).To(ContainSubstring("kubectl-catalog"))
-			Expect(stdout).To(ContainSubstring("install"))
-			Expect(stdout).To(ContainSubstring("generate"))
-			Expect(stdout).To(ContainSubstring("push"))
-			Expect(stdout).To(ContainSubstring("version"))
+			for _, sub := range []string{"install", "generate", "apply", "upgrade", "uninstall", "search", "list", "status", "clean", "version", "completion"} {
+				Expect(stdout).To(ContainSubstring(sub), "missing subcommand %q in help output", sub)
+			}
 		})
 
 		It("should display version information with real values", func() {
@@ -40,7 +59,7 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		It("should display usage for each subcommand help", func() {
-			for _, sub := range []string{"search", "list", "install", "uninstall", "upgrade", "generate", "apply", "push", "clean", "version"} {
+			for _, sub := range []string{"search", "list", "install", "uninstall", "upgrade", "generate", "apply", "status", "clean", "version"} {
 				stdout, _, err := runBinary(sub, "--help")
 				Expect(err).NotTo(HaveOccurred(), "help failed for %s", sub)
 				Expect(stdout).To(ContainSubstring("Usage:"), "missing usage for %s", sub)
@@ -48,46 +67,75 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 	})
 
+	Describe("completion", func() {
+		It("should generate bash completion", func() {
+			stdout, _, err := runBinary("completion", "bash")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stdout).To(ContainSubstring("bash completion"))
+		})
+
+		It("should generate zsh completion", func() {
+			stdout, _, err := runBinary("completion", "zsh")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stdout).To(ContainSubstring("zsh completion"))
+		})
+
+		It("should generate fish completion", func() {
+			stdout, _, err := runBinary("completion", "fish")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stdout).To(ContainSubstring("fish completion"))
+		})
+	})
+
 	Describe("search", func() {
 		It("should find operators by keyword", func() {
-			stdout, _, err := runBinary("search", "prometheus", "--catalog-type", "operatorhub")
+			args := append([]string{"search", "argocd"}, catalogFlags()...)
+			stdout, _, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(stdout).To(ContainSubstring("prometheus"))
+			Expect(stdout).To(ContainSubstring("argocd"))
+		})
+
+		It("should search by GVK with --what-provides", func() {
+			args := append([]string{"search", "--what-provides", "argoproj.io/ArgoCD"}, catalogFlags()...)
+			stdout, _, err := runBinary(args...)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stdout).To(ContainSubstring("argocd-operator"))
 		})
 
 		It("should handle search for non-existent operator", func() {
-			stdout, _, err := runBinary("search", "nonexistent-operator-xyz", "--catalog-type", "operatorhub")
+			args := append([]string{"search", "nonexistent-operator-xyz-99999"}, catalogFlags()...)
+			stdout, _, err := runBinary(args...)
 			if err == nil {
-				// Succeeded — output should not contain the non-existent operator name as a package
-				Expect(stdout).NotTo(ContainSubstring("nonexistent-operator-xyz"))
+				Expect(stdout).NotTo(ContainSubstring("nonexistent-operator-xyz-99999"))
 			}
-			// If it errors, that's also acceptable
 		})
 	})
 
 	Describe("list", func() {
-		It("should list available operators from operatorhub", func() {
-			stdout, _, err := runBinary("list", "--catalog-type", "operatorhub")
+		It("should list available operators from community catalog", func() {
+			args := append([]string{"list"}, catalogFlags()...)
+			stdout, _, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(stdout).To(ContainSubstring("PACKAGE"))
+			Expect(stdout).To(ContainSubstring("argocd-operator"))
 		})
 
 		It("should list installed operators (initially empty)", func() {
 			stdout, _, err := runBinary("list", "--installed")
 			Expect(err).NotTo(HaveOccurred())
-			// Should either show headers with no data rows, or an informational message
-			Expect(stdout).NotTo(ContainSubstring("argocd-operator"))
+			Expect(stdout).NotTo(ContainSubstring(testOperator))
 		})
 
 		It("should show channels with --show-channels", func() {
-			stdout, _, err := runBinary("list", "--catalog-type", "operatorhub", "--show-channels")
+			args := append([]string{"list", "--show-channels"}, catalogFlags()...)
+			stdout, _, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred())
-			// Channel details are printed inline with package names
 			Expect(stdout).To(ContainSubstring("entries"))
 		})
 
 		It("should limit channels with --limit-channels", func() {
-			stdout, _, err := runBinary("list", "--catalog-type", "operatorhub", "--show-channels", "--limit-channels", "1")
+			args := append([]string{"list", "--show-channels", "--limit-channels", "1"}, catalogFlags()...)
+			stdout, _, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(stdout).To(ContainSubstring("entries"))
 		})
@@ -107,11 +155,8 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		It("should generate manifests for an operator", func() {
-			stdout, stderr, err := runBinary("generate", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"-o", outputDir,
-			)
+			args := append([]string{"generate", testOperator, "-o", outputDir}, catalogFlags()...)
+			stdout, stderr, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred(), "stdout: %s\nstderr: %s", stdout, stderr)
 
 			// Verify _metadata.yaml was created
@@ -128,23 +173,18 @@ var _ = Describe("kubectl-catalog E2E", func() {
 					yamlCount++
 				}
 			}
-			// At minimum: _metadata.yaml + at least one resource
 			Expect(yamlCount).To(BeNumerically(">=", 2), "Expected at least 2 YAML files, got %d", yamlCount)
 
 			// Verify metadata content
 			metaData, err := os.ReadFile(filepath.Join(outputDir, "_metadata.yaml"))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(string(metaData)).To(ContainSubstring("argocd-operator"))
+			Expect(string(metaData)).To(ContainSubstring(testOperator))
 			Expect(string(metaData)).To(ContainSubstring("clusterType: k8s"))
 		})
 
-		It("should generate with specific version and channel", func() {
-			stdout, stderr, err := runBinary("generate", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"--channel", "alpha",
-				"-o", outputDir,
-			)
+		It("should generate with specific channel", func() {
+			args := append([]string{"generate", testOperator, "--channel", "alpha", "-o", outputDir}, catalogFlags()...)
+			stdout, stderr, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred(), "stdout: %s\nstderr: %s", stdout, stderr)
 
 			metaData, err := os.ReadFile(filepath.Join(outputDir, "_metadata.yaml"))
@@ -153,12 +193,8 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		It("should generate with custom namespace", func() {
-			stdout, stderr, err := runBinary("generate", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"-n", "custom-ns",
-				"-o", outputDir,
-			)
+			args := append([]string{"generate", testOperator, "-n", "custom-ns", "-o", outputDir}, catalogFlags()...)
+			stdout, stderr, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred(), "stdout: %s\nstderr: %s", stdout, stderr)
 
 			metaData, err := os.ReadFile(filepath.Join(outputDir, "_metadata.yaml"))
@@ -167,13 +203,8 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		It("should generate with SingleNamespace install mode", func() {
-			stdout, stderr, err := runBinary("generate", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"--install-mode", "SingleNamespace",
-				"-n", "my-ns",
-				"-o", outputDir,
-			)
+			args := append([]string{"generate", testOperator, "--install-mode", "SingleNamespace", "-n", "my-ns", "-o", outputDir}, catalogFlags()...)
+			stdout, stderr, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred(), "stdout: %s\nstderr: %s", stdout, stderr)
 			Expect(stdout).To(ContainSubstring("SingleNamespace"))
 
@@ -183,11 +214,59 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		It("should fail for non-existent package", func() {
-			_, _, err := runBinary("generate", "nonexistent-operator-xyz-12345",
-				"--catalog-type", "operatorhub",
-				"-o", outputDir,
-			)
+			args := append([]string{"generate", "nonexistent-operator-xyz-12345", "-o", outputDir}, catalogFlags()...)
+			_, stderr, err := runBinary(args...)
 			Expect(err).To(HaveOccurred())
+			// Should include a hint
+			Expect(stderr).To(ContainSubstring("Hint:"))
+		})
+	})
+
+	Describe("generate to OCI registry", func() {
+		var outputDir string
+
+		BeforeEach(func() {
+			var err error
+			outputDir, err = os.MkdirTemp("", "kubectl-catalog-oci-*")
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			os.RemoveAll(outputDir)
+		})
+
+		It("should push generated manifests to a local OCI registry", func() {
+			ociRef := fmt.Sprintf("oci://%s/e2e-test/%s:v1.0.0", registryURL, testOperator)
+			args := append([]string{"generate", testOperator, "-o", ociRef}, catalogFlags()...)
+			stdout, stderr, err := runBinary(args...)
+			Expect(err).NotTo(HaveOccurred(), "generate+push failed: %s\n%s", stdout, stderr)
+			Expect(stdout).To(ContainSubstring("Successfully pushed"))
+			Expect(stdout).To(ContainSubstring("Argo CD"))
+			Expect(stdout).To(ContainSubstring("FluxCD"))
+		})
+
+		It("should push with auto-generated tag from channel", func() {
+			// No tag specified — should auto-derive from the channel name
+			ociRef := fmt.Sprintf("oci://%s/e2e-test/%s-autotag", registryURL, testOperator)
+			args := append([]string{"generate", testOperator, "-o", ociRef}, catalogFlags()...)
+			stdout, stderr, err := runBinary(args...)
+			Expect(err).NotTo(HaveOccurred(), "generate+push failed: %s\n%s", stdout, stderr)
+			Expect(stdout).To(ContainSubstring("Successfully pushed"))
+		})
+
+		It("should verify the OCI artifact is accessible via the registry API", func() {
+			tag := "v2.0.0"
+			ociRef := fmt.Sprintf("oci://%s/e2e-verify/%s:%s", registryURL, testOperator, tag)
+			args := append([]string{"generate", testOperator, "-o", ociRef}, catalogFlags()...)
+			_, stderr, err := runBinary(args...)
+			Expect(err).NotTo(HaveOccurred(), "generate+push failed: %s", stderr)
+
+			By("Verifying the image exists in the registry via HTTP API")
+			cmd := exec.Command("curl", "-sf",
+				fmt.Sprintf("http://%s/v2/e2e-verify/%s/tags/list", registryURL, testOperator))
+			output, err := cmd.Output()
+			Expect(err).NotTo(HaveOccurred(), "registry API call failed")
+			Expect(string(output)).To(ContainSubstring(tag))
 		})
 	})
 
@@ -201,19 +280,14 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		AfterEach(func() {
-			// Clean up any resources created by apply
-			runBinary("uninstall", "argocd-operator", "--yes", "--force")
+			runBinary("uninstall", testOperator)
 			os.RemoveAll(outputDir)
 		})
 
 		It("should apply generated manifests to the cluster", func() {
 			By("Generating manifests")
-			stdout, stderr, err := runBinary("generate", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"-n", "default",
-				"-o", outputDir,
-			)
+			args := append([]string{"generate", testOperator, "-n", "default", "-o", outputDir}, catalogFlags()...)
+			stdout, stderr, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred(), "generate failed: %s\n%s", stdout, stderr)
 
 			By("Applying manifests")
@@ -225,7 +299,7 @@ var _ = Describe("kubectl-catalog E2E", func() {
 			Eventually(func() string {
 				stdout, _, _ = runBinary("list", "--installed")
 				return stdout
-			}, 30*time.Second, 5*time.Second).Should(ContainSubstring("argocd-operator"))
+			}, 30*time.Second, 5*time.Second).Should(ContainSubstring(testOperator))
 		})
 
 		It("should fail for directory without _metadata.yaml", func() {
@@ -240,17 +314,13 @@ var _ = Describe("kubectl-catalog E2E", func() {
 
 	Describe("install and uninstall", func() {
 		AfterEach(func() {
-			// Clean up
-			runBinary("uninstall", "argocd-operator", "--yes", "--force")
+			runBinary("uninstall", testOperator)
 		})
 
 		It("should install an operator and then uninstall it", func() {
 			By("Installing the operator")
-			stdout, stderr, err := runBinary("install", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"-n", "default",
-			)
+			args := append([]string{"install", testOperator, "-n", "default"}, catalogFlags()...)
+			stdout, stderr, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred(), "install failed: %s\n%s", stdout, stderr)
 			Expect(stdout).To(ContainSubstring("Successfully installed"))
 
@@ -258,27 +328,20 @@ var _ = Describe("kubectl-catalog E2E", func() {
 			Eventually(func() string {
 				stdout, _, _ = runBinary("list", "--installed")
 				return stdout
-			}, 30*time.Second, 5*time.Second).Should(ContainSubstring("argocd-operator"))
+			}, 30*time.Second, 5*time.Second).Should(ContainSubstring(testOperator))
 
 			By("Checking install is idempotent (should fail without --force)")
-			_, _, err = runBinary("install", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"-n", "default",
-			)
+			args = append([]string{"install", testOperator, "-n", "default"}, catalogFlags()...)
+			_, _, err = runBinary(args...)
 			Expect(err).To(HaveOccurred())
 
 			By("Re-installing with --force")
-			stdout, stderr, err = runBinary("install", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"-n", "default",
-				"--force",
-			)
+			args = append([]string{"install", testOperator, "-n", "default", "--force"}, catalogFlags()...)
+			stdout, stderr, err = runBinary(args...)
 			Expect(err).NotTo(HaveOccurred(), "force install failed: %s\n%s", stdout, stderr)
 
 			By("Uninstalling the operator")
-			stdout, stderr, err = runBinary("uninstall", "argocd-operator", "--yes")
+			stdout, stderr, err = runBinary("uninstall", testOperator)
 			Expect(err).NotTo(HaveOccurred(), "uninstall failed: %s\n%s", stdout, stderr)
 			Expect(stdout).To(ContainSubstring("uninstall"))
 
@@ -286,41 +349,64 @@ var _ = Describe("kubectl-catalog E2E", func() {
 			Eventually(func() string {
 				stdout, _, _ = runBinary("list", "--installed")
 				return stdout
-			}, 30*time.Second, 5*time.Second).ShouldNot(ContainSubstring("argocd-operator"))
+			}, 30*time.Second, 5*time.Second).ShouldNot(ContainSubstring(testOperator))
 		})
 
 		It("should install with SingleNamespace mode", func() {
-			stdout, stderr, err := runBinary("install", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"--install-mode", "SingleNamespace",
-				"-n", "default",
-			)
+			args := append([]string{"install", testOperator, "--install-mode", "SingleNamespace", "-n", "default"}, catalogFlags()...)
+			stdout, stderr, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred(), "install failed: %s\n%s", stdout, stderr)
 			Expect(stdout).To(ContainSubstring("SingleNamespace"))
 		})
 	})
 
-	Describe("upgrade", func() {
+	Describe("status", func() {
 		BeforeEach(func() {
-			// Install an operator first so we can test upgrade
-			_, _, err := runBinary("install", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"-n", "default",
-			)
+			args := append([]string{"install", testOperator, "-n", "default", "--no-wait"}, catalogFlags()...)
+			_, _, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
 		AfterEach(func() {
-			runBinary("uninstall", "argocd-operator", "--yes", "--force")
+			runBinary("uninstall", testOperator)
 		})
 
-		It("should upgrade an installed operator", func() {
-			stdout, stderr, err := runBinary("upgrade", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-			)
+		It("should show status of an installed operator", func() {
+			stdout, stderr, err := runBinary("status", testOperator)
+			Expect(err).NotTo(HaveOccurred(), "status failed: %s\n%s", stdout, stderr)
+			Expect(stdout).To(ContainSubstring("Package:"))
+			Expect(stdout).To(ContainSubstring("Version:"))
+			Expect(stdout).To(ContainSubstring("Channel:"))
+			Expect(stdout).To(ContainSubstring("DEPLOYMENTS:"))
+		})
+
+		It("should show status with events", func() {
+			stdout, stderr, err := runBinary("status", testOperator, "--show-events")
+			Expect(err).NotTo(HaveOccurred(), "status --show-events failed: %s\n%s", stdout, stderr)
+			Expect(stdout).To(ContainSubstring("RECENT EVENTS:"))
+		})
+
+		It("should fail for non-installed operator with a hint", func() {
+			_, stderr, err := runBinary("status", "nonexistent-operator-xyz")
+			Expect(err).To(HaveOccurred())
+			Expect(stderr).To(ContainSubstring("Hint:"))
+		})
+	})
+
+	Describe("upgrade", func() {
+		BeforeEach(func() {
+			args := append([]string{"install", testOperator, "-n", "default"}, catalogFlags()...)
+			_, _, err := runBinary(args...)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			runBinary("uninstall", testOperator)
+		})
+
+		It("should upgrade or report already at latest", func() {
+			args := append([]string{"upgrade", testOperator}, catalogFlags()...)
+			stdout, stderr, err := runBinary(args...)
 			// Upgrade may succeed or report "already at latest" — both are valid
 			if err != nil {
 				combined := stdout + stderr
@@ -337,30 +423,70 @@ var _ = Describe("kubectl-catalog E2E", func() {
 			}
 		})
 
-		It("should fail to upgrade a non-installed operator", func() {
-			_, _, err := runBinary("upgrade", "nonexistent-operator-xyz",
-				"--catalog-type", "operatorhub",
-			)
+		It("should show diff without applying when --diff is used", func() {
+			args := append([]string{"upgrade", testOperator, "--diff"}, catalogFlags()...)
+			stdout, stderr, err := runBinary(args...)
+			// May succeed (showing diff) or fail (already at latest)
+			if err == nil {
+				Expect(stdout).To(ContainSubstring("Summary:"))
+				Expect(stdout).To(ContainSubstring("No changes applied"))
+			} else {
+				combined := stdout + stderr
+				Expect(combined).To(SatisfyAny(
+					ContainSubstring("already"),
+					ContainSubstring("latest"),
+					ContainSubstring("no upgrade"),
+				))
+			}
+		})
+
+		It("should fail to upgrade a non-installed operator with a hint", func() {
+			_, stderr, err := runBinary("upgrade", "nonexistent-operator-xyz")
 			Expect(err).To(HaveOccurred())
+			Expect(stderr).To(ContainSubstring("Hint:"))
 		})
 	})
 
-	Describe("install with --catalog-type redhat requires --pull-secret", func() {
-		It("should fail without --pull-secret for redhat catalog", func() {
-			_, _, err := runBinary("install", "cluster-logging",
+	Describe("error handling and hints", func() {
+		It("should require --ocp-version for redhat catalog type with a hint", func() {
+			_, stderr, err := runBinary("search", "test", "--catalog-type", "redhat")
+			Expect(err).To(HaveOccurred())
+			Expect(stderr).To(ContainSubstring("--ocp-version"))
+		})
+
+		It("should require --pull-secret for redhat catalog type", func() {
+			_, stderr, err := runBinary("install", "cluster-logging",
 				"--catalog-type", "redhat",
 				"--ocp-version", "4.20",
 				"-n", "default",
 			)
 			Expect(err).To(HaveOccurred())
+			Expect(stderr).To(ContainSubstring("pull-secret"))
 		})
 
-		It("should fail without --pull-secret for community catalog", func() {
-			_, _, err := runBinary("install", "some-operator",
-				"--catalog-type", "community",
-				"--ocp-version", "4.20",
-				"-n", "default",
-			)
+		It("should NOT require --pull-secret for community catalog type", func() {
+			// Community catalog at registry.redhat.io is publicly accessible
+			args := append([]string{"search", "argocd"}, catalogFlags()...)
+			_, _, err := runBinary(args...)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should show hint when package not found", func() {
+			args := append([]string{"install", "nonexistent-operator-xyz-12345", "-n", "default"}, catalogFlags()...)
+			_, stderr, err := runBinary(args...)
+			Expect(err).To(HaveOccurred())
+			Expect(stderr).To(ContainSubstring("Hint:"))
+		})
+
+		It("should not print help on command failure", func() {
+			args := append([]string{"install", "nonexistent-operator-xyz", "-n", "default"}, catalogFlags()...)
+			_, stderr, err := runBinary(args...)
+			Expect(err).To(HaveOccurred())
+			Expect(stderr).NotTo(ContainSubstring("Usage:"))
+		})
+
+		It("should print help on argument errors", func() {
+			_, _, err := runBinary("install")
 			Expect(err).To(HaveOccurred())
 		})
 	})
@@ -379,136 +505,6 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		It("should clean only bundles", func() {
 			stdout, stderr, err := runBinary("clean", "--bundles")
 			Expect(err).NotTo(HaveOccurred(), "clean --bundles failed: %s\n%s", stdout, stderr)
-		})
-	})
-
-	Describe("push", func() {
-		var outputDir string
-
-		BeforeEach(func() {
-			var err error
-			outputDir, err = os.MkdirTemp("", "kubectl-catalog-push-*")
-			Expect(err).NotTo(HaveOccurred())
-		})
-
-		AfterEach(func() {
-			os.RemoveAll(outputDir)
-		})
-
-		It("should push generated manifests to a local registry", func() {
-			By("Generating manifests")
-			stdout, stderr, err := runBinary("generate", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"-o", outputDir,
-			)
-			Expect(err).NotTo(HaveOccurred(), "generate failed: %s\n%s", stdout, stderr)
-
-			By("Pushing to local registry")
-			stdout, stderr, err = runBinary("push", outputDir,
-				"--registry", registryURL,
-				"--repo-namespace", "e2e-test",
-			)
-			Expect(err).NotTo(HaveOccurred(), "push failed: %s\n%s", stdout, stderr)
-			Expect(stdout).To(ContainSubstring("Successfully pushed"))
-			Expect(stdout).To(ContainSubstring("Argo CD"))
-			Expect(stdout).To(ContainSubstring("FluxCD"))
-		})
-
-		It("should push with custom tag", func() {
-			By("Generating manifests")
-			stdout, stderr, err := runBinary("generate", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"-o", outputDir,
-			)
-			Expect(err).NotTo(HaveOccurred(), "generate failed: %s\n%s", stdout, stderr)
-
-			By("Pushing with custom tag")
-			stdout, stderr, err = runBinary("push", outputDir,
-				"--registry", registryURL,
-				"--repo-namespace", "e2e-test",
-				"--tag", "latest",
-			)
-			Expect(err).NotTo(HaveOccurred(), "push failed: %s\n%s", stdout, stderr)
-			Expect(stdout).To(ContainSubstring("latest"))
-		})
-
-		It("should verify the OCI artifact is accessible via the registry API", func() {
-			By("Generating manifests")
-			_, stderr, err := runBinary("generate", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"-o", outputDir,
-			)
-			Expect(err).NotTo(HaveOccurred(), "generate failed: %s", stderr)
-
-			By("Pushing to local registry")
-			_, stderr, err = runBinary("push", outputDir,
-				"--registry", registryURL,
-				"--repo-namespace", "e2e-verify",
-				"--tag", "v1.0.0",
-			)
-			Expect(err).NotTo(HaveOccurred(), "push failed: %s", stderr)
-
-			By("Verifying the image exists in the registry via HTTP API")
-			cmd := exec.Command("curl", "-sf",
-				fmt.Sprintf("http://%s/v2/e2e-verify/argocd-operator/tags/list", registryURL))
-			output, err := cmd.Output()
-			Expect(err).NotTo(HaveOccurred(), "registry API call failed")
-			Expect(string(output)).To(ContainSubstring("v1.0.0"))
-		})
-
-		It("should push with custom package name", func() {
-			By("Generating manifests")
-			stdout, stderr, err := runBinary("generate", "argocd-operator",
-				"--catalog-type", "operatorhub",
-				"--cluster-type", "k8s",
-				"-o", outputDir,
-			)
-			Expect(err).NotTo(HaveOccurred(), "generate failed: %s\n%s", stdout, stderr)
-
-			By("Pushing with custom package name")
-			stdout, stderr, err = runBinary("push", outputDir,
-				"--registry", registryURL,
-				"--repo-namespace", "e2e-test",
-				"--package", "custom-pkg-name",
-				"--tag", "v0.1.0",
-			)
-			Expect(err).NotTo(HaveOccurred(), "push failed: %s\n%s", stdout, stderr)
-			Expect(stdout).To(ContainSubstring("Successfully pushed"))
-
-			By("Verifying the custom-named image exists in the registry")
-			cmd := exec.Command("curl", "-sf",
-				fmt.Sprintf("http://%s/v2/e2e-test/custom-pkg-name/tags/list", registryURL))
-			output, err := cmd.Output()
-			Expect(err).NotTo(HaveOccurred(), "registry API call failed")
-			Expect(string(output)).To(ContainSubstring("v0.1.0"))
-		})
-
-		It("should fail for directory without _metadata.yaml", func() {
-			emptyDir, err := os.MkdirTemp("", "empty-push-*")
-			Expect(err).NotTo(HaveOccurred())
-			defer os.RemoveAll(emptyDir)
-
-			_, _, err = runBinary("push", emptyDir, "--registry", registryURL)
-			Expect(err).To(HaveOccurred())
-		})
-	})
-
-	Describe("error handling", func() {
-		It("should not print help on command failure", func() {
-			_, stderr, err := runBinary("install", "nonexistent-operator-xyz",
-				"--catalog-type", "operatorhub",
-			)
-			Expect(err).To(HaveOccurred())
-			// Should NOT print the full help/usage text
-			Expect(stderr).NotTo(ContainSubstring("Usage:"))
-		})
-
-		It("should print help on argument errors", func() {
-			_, _, err := runBinary("install")
-			Expect(err).To(HaveOccurred())
 		})
 	})
 })
