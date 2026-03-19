@@ -607,7 +607,11 @@ func (a *Applier) waitForCRDs(ctx context.Context, crds []*unstructured.Unstruct
 		for time.Now().Before(deadline) {
 			obj, err := resource.Get(ctx, crdName, metav1.GetOptions{})
 			if err != nil {
-				time.Sleep(pollInterval)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(pollInterval):
+				}
 				continue
 			}
 
@@ -619,7 +623,11 @@ func (a *Applier) waitForCRDs(ctx context.Context, crds []*unstructured.Unstruct
 			if time.Now().Add(pollInterval).After(deadline) {
 				return fmt.Errorf("timed out waiting for CRD %s to be established", crdName)
 			}
-			time.Sleep(pollInterval)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(pollInterval):
+			}
 		}
 	}
 	return nil
@@ -650,7 +658,11 @@ func (a *Applier) waitForDeployments(ctx context.Context, deployments []*unstruc
 		for time.Now().Before(deadline) {
 			obj, err := resource.Get(ctx, depName, metav1.GetOptions{})
 			if err != nil {
-				time.Sleep(pollInterval)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(pollInterval):
+				}
 				continue
 			}
 
@@ -663,7 +675,11 @@ func (a *Applier) waitForDeployments(ctx context.Context, deployments []*unstruc
 			if time.Now().Add(pollInterval).After(deadline) {
 				return fmt.Errorf("timed out waiting for Deployment %s to be ready: %s", depName, reason)
 			}
-			time.Sleep(pollInterval)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(pollInterval):
+			}
 		}
 	}
 	return nil

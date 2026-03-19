@@ -227,12 +227,24 @@ func cleanupUntrackedResources(ctx context.Context, k8sApplier *applier.Applier,
 	bundleDir, err := puller.PullBundle(ctx, installed.BundleImage)
 	if err != nil {
 		fmt.Printf("  Warning: could not pull bundle %q for cleanup: %v\n", installed.BundleImage, err)
+		fmt.Printf("  The following cluster-scoped resource types may be orphaned:\n")
+		fmt.Printf("    - CustomResourceDefinitions\n")
+		fmt.Printf("    - ClusterRoles / ClusterRoleBindings\n")
+		fmt.Printf("    - ValidatingWebhookConfigurations / MutatingWebhookConfigurations\n")
+		fmt.Printf("  To find them, run:\n")
+		fmt.Printf("    kubectl get crd,clusterrole,clusterrolebinding -l kubectl-catalog.io/package=%s\n", installed.PackageName)
 		return
 	}
 
 	manifests, err := bundle.Extract(bundleDir)
 	if err != nil {
 		fmt.Printf("  Warning: could not extract bundle %q for cleanup: %v\n", installed.BundleImage, err)
+		fmt.Printf("  The following cluster-scoped resource types may be orphaned:\n")
+		fmt.Printf("    - CustomResourceDefinitions\n")
+		fmt.Printf("    - ClusterRoles / ClusterRoleBindings\n")
+		fmt.Printf("    - ValidatingWebhookConfigurations / MutatingWebhookConfigurations\n")
+		fmt.Printf("  To find them, run:\n")
+		fmt.Printf("    kubectl get crd,clusterrole,clusterrolebinding -l kubectl-catalog.io/package=%s\n", installed.PackageName)
 		return
 	}
 

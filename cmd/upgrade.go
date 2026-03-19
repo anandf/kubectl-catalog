@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/anandf/kubectl-catalog/internal/applier"
 	"github.com/anandf/kubectl-catalog/internal/bundle"
@@ -124,6 +125,14 @@ the catalog reference stored in the installed resource annotations is used.`,
 			return fmt.Errorf("failed to resolve dependencies for target version: %w", err)
 		}
 
+		// Track newly installed dependencies for rollback if the main upgrade fails
+		type installedDep struct {
+			name      string
+			manifests *bundle.Manifests
+			applier   *applier.Applier
+		}
+		var newlyInstalledDeps []installedDep
+
 		// Install any new dependencies that aren't already installed
 		if len(depPlan.Bundles) > 1 {
 			for _, dep := range depPlan.Bundles {
@@ -176,6 +185,12 @@ the catalog reference stored in the installed resource annotations is used.`,
 				if err := depApplier.Apply(ctx, depManifests, depIC); err != nil {
 					return fmt.Errorf("failed to apply dependency %q: %w", dep.Name, err)
 				}
+
+				newlyInstalledDeps = append(newlyInstalledDeps, installedDep{
+					name:      dep.Name,
+					manifests: depManifests,
+					applier:   depApplier,
+				})
 			}
 		}
 
@@ -282,6 +297,25 @@ the catalog reference stored in the installed resource annotations is used.`,
 		}
 
 		if err := k8sApplier.Apply(ctx, manifests, ic); err != nil {
+			// Roll back newly installed dependencies if the main upgrade fails
+			if len(newlyInstalledDeps) > 0 && !dryRun {
+				fmt.Printf("\nUpgrade failed, rolling back %d newly installed dependency(ies)...\n", len(newlyInstalledDeps))
+				rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer rollbackCancel()
+				for i := len(newlyInstalledDeps) - 1; i >= 0; i-- {
+					dep := newlyInstalledDeps[i]
+					allResources := dep.manifests.AllResources()
+					var asList []unstructured.Unstructured
+					for _, obj := range allResources {
+						asList = append(asList, *obj)
+					}
+					if delErr := dep.applier.DeleteResources(rollbackCtx, asList); delErr != nil {
+						fmt.Printf("  Warning: rollback error for dependency %q: %v\n", dep.name, delErr)
+					} else {
+						fmt.Printf("  Rolled back dependency %q\n", dep.name)
+					}
+				}
+			}
 			return fmt.Errorf("failed to apply bundle %q: %w", target.Name, err)
 		}
 

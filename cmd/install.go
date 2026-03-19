@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/anandf/kubectl-catalog/internal/applier"
 	"github.com/anandf/kubectl-catalog/internal/bundle"
@@ -234,7 +235,8 @@ If the operator is already installed, use --force to re-install.`,
 			// Roll back previously applied resources on failure
 			if len(appliedManifests) > 0 && !dryRun {
 				fmt.Printf("\nInstall failed, rolling back %d previously applied bundle(s)...\n", len(appliedManifests))
-				rollbackCtx := context.Background()
+				rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer rollbackCancel()
 				for i := len(appliedManifests) - 1; i >= 0; i-- {
 					allResources := appliedManifests[i].AllResources()
 					var asList []unstructured.Unstructured

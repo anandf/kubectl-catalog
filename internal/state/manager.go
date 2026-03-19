@@ -338,6 +338,9 @@ func kindPriority(kind string) int {
 // reading installed operator annotations. Deployments are preferred because they
 // are most likely to have correct, up-to-date annotations.
 func bestMetadataResource(resources []unstructured.Unstructured) *unstructured.Unstructured {
+	if len(resources) == 0 {
+		return nil
+	}
 	best := &resources[0]
 	bestPri := kindPriority(best.GetKind())
 	for i := 1; i < len(resources); i++ {
