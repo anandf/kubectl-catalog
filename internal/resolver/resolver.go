@@ -3,6 +3,7 @@ package resolver
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/blang/semver/v4"
@@ -147,6 +148,9 @@ func (r *Resolver) findUpgradePath(ch *catalog.Channel, fromBundle, toBundle str
 		// skipRange: any bundle whose version falls within the range can upgrade to this entry
 		if entry.SkipRange != "" {
 			rang, err := parseSemverRange(entry.SkipRange)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: skipping skipRange %q for entry %q: %v\n", entry.SkipRange, entry.Name, err)
+			}
 			if err == nil {
 				for _, other := range ch.Entries {
 					if other.Name == entry.Name {
@@ -400,6 +404,7 @@ func (r *Resolver) resolveDependencies(bundleName, channel string, plan *Install
 
 			providerBundle := r.fbc.GetBundle(provider)
 			if providerBundle == nil {
+				fmt.Fprintf(os.Stderr, "Warning: GVK provider bundle %q not found in catalog, skipping\n", provider)
 				continue
 			}
 
@@ -503,9 +508,11 @@ func (r *Resolver) bundleVersion(b *catalog.Bundle) string {
 			var pkgProp struct {
 				Version string `json:"version"`
 			}
-			if err := json.Unmarshal(prop.Value, &pkgProp); err == nil {
-				return pkgProp.Version
+			if err := json.Unmarshal(prop.Value, &pkgProp); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: invalid JSON in olm.package property for bundle %q: %v\n", b.Name, err)
+				continue
 			}
+			return pkgProp.Version
 		}
 	}
 	return ""

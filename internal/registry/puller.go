@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -167,7 +168,21 @@ type pullSecretKeychain struct {
 }
 
 type authEntry struct {
-	Auth string `json:"auth"`
+	Auth     string `json:"auth"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// resolvedAuth returns the base64-encoded auth string. If the Auth field is
+// empty, it falls back to constructing it from Username and Password fields.
+func (e authEntry) resolvedAuth() string {
+	if e.Auth != "" {
+		return e.Auth
+	}
+	if e.Username != "" {
+		return base64.StdEncoding.EncodeToString([]byte(e.Username + ":" + e.Password))
+	}
+	return ""
 }
 
 type pullSecretFile struct {
@@ -191,14 +206,18 @@ func (k *pullSecretKeychain) Resolve(resource authn.Resource) (authn.Authenticat
 	// Try the full registry host
 	registryName := resource.RegistryStr()
 
-	if entry, ok := k.auths[registryName]; ok && entry.Auth != "" {
-		return authn.FromConfig(authn.AuthConfig{Auth: entry.Auth}), nil
+	if entry, ok := k.auths[registryName]; ok {
+		if auth := entry.resolvedAuth(); auth != "" {
+			return authn.FromConfig(authn.AuthConfig{Auth: auth}), nil
+		}
 	}
 
 	// Some pull secrets use "https://registry.example.com" as the key
 	for key, entry := range k.auths {
-		if matchesRegistry(key, registryName) && entry.Auth != "" {
-			return authn.FromConfig(authn.AuthConfig{Auth: entry.Auth}), nil
+		if matchesRegistry(key, registryName) {
+			if auth := entry.resolvedAuth(); auth != "" {
+				return authn.FromConfig(authn.AuthConfig{Auth: auth}), nil
+			}
 		}
 	}
 

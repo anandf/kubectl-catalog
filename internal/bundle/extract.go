@@ -188,7 +188,7 @@ func splitYAMLDocuments(data []byte) [][]byte {
 		result = append(result, doc)
 	}
 	if len(result) == 0 {
-		return [][]byte{data}
+		return nil
 	}
 	return result
 }

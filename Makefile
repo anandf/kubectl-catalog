@@ -10,7 +10,7 @@ DIST_DIR   = dist
 # All platform targets for cross-compilation
 PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
-.PHONY: build install clean test build-all checksums
+.PHONY: build install clean test lint vet fmt-check build-all checksums
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
@@ -20,6 +20,15 @@ install:
 
 test:
 	go test ./internal/... ./cmd/...
+
+lint:
+	golangci-lint run ./...
+
+vet:
+	go vet ./...
+
+fmt-check:
+	@test -z "$$(gofmt -l .)" || (echo "Files need formatting:"; gofmt -l .; exit 1)
 
 test-e2e:
 	go test ./test/e2e/... -v -timeout 30m

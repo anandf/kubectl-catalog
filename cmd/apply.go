@@ -11,7 +11,6 @@ import (
 
 	"github.com/anandf/kubectl-catalog/internal/applier"
 	"github.com/anandf/kubectl-catalog/internal/bundle"
-	"github.com/anandf/kubectl-catalog/internal/registry"
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
@@ -269,6 +268,14 @@ func resolveApplySource(ctx context.Context, source string) (manifestDir string,
 	}
 
 	ociRef := strings.TrimPrefix(source, "oci://")
+
+	// Validate pull secret for Red Hat registry images
+	if strings.Contains(ociRef, "registry.redhat.io") {
+		if err := requirePullSecretForRedHat(ociRef); err != nil {
+			return "", "", err
+		}
+	}
+
 	fmt.Printf("Pulling OCI artifact %s...\n", ociRef)
 
 	tmpDir, err := os.MkdirTemp("", "kubectl-catalog-apply-*")
@@ -276,7 +283,11 @@ func resolveApplySource(ctx context.Context, source string) (manifestDir string,
 		return "", "", fmt.Errorf("creating temp directory: %w", err)
 	}
 
-	puller := registry.NewImagePuller(cacheDir)
+	puller, pullerErr := newImagePuller()
+	if pullerErr != nil {
+		os.RemoveAll(tmpDir)
+		return "", "", pullerErr
+	}
 	if err := puller.PullArtifact(ctx, ociRef, tmpDir); err != nil {
 		os.RemoveAll(tmpDir)
 		return "", "", fmt.Errorf("failed to pull OCI artifact: %w", err)

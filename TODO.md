@@ -178,49 +178,52 @@ The following gaps were identified from a full codebase review covering all cmd/
   - Add a release workflow: multi-platform build, checksums, GitHub Release creation
   - Consider GoReleaser (`.goreleaser.yml`) for automated release with changelogs
 
-### 27. No linting or static analysis in Makefile
-- **Problem**: Makefile has `test` and `test-e2e` targets but no `lint`, `vet`, `fmt-check`, or `security-scan` targets.
-- **Files**: `Makefile`
-- **Work**: Add targets for `golangci-lint run`, `go vet ./...`, `gofmt -d .`, and optionally `gosec ./...`.
+### ~~27. No linting or static analysis in Makefile~~ DONE
+- Added `lint` target: runs `golangci-lint run ./...`
+- Added `vet` target: runs `go vet ./...`
+- Added `fmt-check` target: checks for unformatted files and fails with a list if any are found
+- All three targets added to `.PHONY` declaration
 
-### 28. Applier package has zero unit tests
-- **Problem**: `internal/applier/applier.go` (~900 lines) has no unit tests at all. Critical functions untested: `Apply()`, `DeleteResources()`, `Preflight()`, `waitForCRDs()`, `waitForDeployments()`, `EnsurePullSecret()`, `PatchServiceAccountPullSecret()`, `CleanupWebhookConfigurations()`, `DeleteNamespace()`.
-- **Files**: `internal/applier/`
-- **Work**: Add unit tests using a fake Kubernetes client (`k8s.io/client-go/kubernetes/fake`) for at least Preflight, wait loops, and resource application logic.
+### ~~28. Applier package has zero unit tests~~ DONE
+- Added `internal/applier/applier_test.go` with 22 tests using `k8s.io/client-go/dynamic/fake`
+- Test infrastructure: `newTestApplier()` creates an Applier with fake dynamic client, REST mapper for all resource types, and a patch reactor for server-side apply emulation
+- Tests cover: `PullSecretName`, `Namespace`/`SetNamespace`, `DryRun`, `EnsureNamespace` (create + idempotent + dry-run), `stampMetadata` (with existing and nil maps), `isCRDEstablished` (4 cases), `isDeploymentReady` (5 cases: ready, pending, failed rollout, no conditions, default replicas), `setDefaultSubjectNamespaces` (inject + preserve + non-binding), `EnsurePullSecret` (create + dry-run), `DeletePullSecret` (not-found + dry-run), `DeleteNamespace` (protected + not-found), `Apply` (dry-run with RBAC/Deployments/Services/Other + tracking metadata), `DeleteResources` (dry-run + not-found), `CleanupWebhookConfigurations` (empty), GVR helpers, Options
 
-### 29. Certs package mostly untested
-- **Problem**: `internal/certs/serving.go` only has tests for cert generation. `EnsureServingCerts()`, `EnsureWebhookCert()`, `InjectCABundle()`, `FindWebhookCertSecrets()`, and `BuildWebhookServiceMap()` have no unit tests.
-- **Files**: `internal/certs/serving.go`, `internal/certs/serving_test.go`
-- **Work**: Add tests with fake clients for cert secret creation, annotation detection, and CA bundle injection.
+### ~~29. Certs package mostly untested~~ DONE
+- Added 14 new tests to `internal/certs/serving_test.go`
+- `isCertMountPath`: 10 cases covering all known cert paths, trailing slashes, substring matches, and negatives
+- `isCertSecretName`: 8 cases covering exact matches, suffix patterns, substring patterns, and negatives
+- `FindWebhookCertSecrets`: 4 tests — cert volume mount detection, no cert volumes, secret name pattern matching, no volumes at all
+- `BuildWebhookServiceMap`: 3 tests — annotated webhook with service mapping + common naming conventions, empty input, webhook with no entries
+- `InjectCABundle`: 3 tests — matching service injection with base64 verification, non-matching service skipped, empty service name matches all
+- `EnsureServingCerts` and `EnsureWebhookCert` require a kubeconfig/cluster and are covered by E2E tests
 
-### 30. Silent failures in dependency resolution
-- **Problem**: `internal/resolver/resolver.go:403` — when a bundle referenced in the catalog is not found, it `continue`s silently. `resolver.go:505-508` — if a bundle property has invalid JSON, the version extraction silently returns empty. `resolver.go:149-171` — if `skipRange` semver parsing fails, the entire skipRange processing is silently skipped.
-- **Files**: `internal/resolver/resolver.go`
-- **Work**: Log warnings for these cases so users can diagnose resolution failures. Consider returning errors for missing bundles referenced in the catalog.
+### ~~30. Silent failures in dependency resolution~~ DONE
+- Added `fmt.Fprintf(os.Stderr, ...)` warnings to three silent failure paths in `internal/resolver/resolver.go`:
+  - `skipRange` parsing failure: warns with the invalid range string, entry name, and parse error
+  - GVK provider bundle not found: warns when `GetBundle()` returns nil for a resolved provider
+  - Invalid JSON in `olm.package` property: warns with the bundle name and unmarshal error instead of silently returning empty version
 
-### 31. `splitYAMLDocuments` returns original data when all docs are empty
-- **Problem**: `internal/bundle/extract.go:190-192` — if all documents in a multi-doc YAML are empty or comment-only, the function returns `[][]byte{data}` (the original unparseable data). This can cause confusing errors downstream.
-- **Files**: `internal/bundle/extract.go`
-- **Work**: Return an empty slice or a descriptive error instead of the original data.
+### ~~31. `splitYAMLDocuments` returns original data when all docs are empty~~ DONE
+- Changed `splitYAMLDocuments` to return `nil` instead of `[][]byte{data}` when all documents are empty or comment-only
+- `Extract()` iterates with `range` over the result, so `nil` is safely treated as zero documents — no confusing downstream errors
 
-### 32. Apply command missing `requirePullSecretForRedHat()` validation
-- **Problem**: The `apply` command (`cmd/apply.go`) does not call `requirePullSecretForRedHat()` when resolving OCI sources, unlike `install` and `generate`. A user could hit an opaque auth error when applying from a Red Hat registry OCI artifact.
-- **Files**: `cmd/apply.go`
-- **Work**: Add pull secret validation when the OCI source is from `registry.redhat.io`.
+### ~~32. Apply command missing `requirePullSecretForRedHat()` validation~~ DONE
+- Added `requirePullSecretForRedHat()` check in `resolveApplySource()` when the OCI reference contains `registry.redhat.io`
+- Also switched from `registry.NewImagePuller(cacheDir)` to `newImagePuller()` so the apply command uses the `--pull-secret` credentials when pulling OCI artifacts (consistent with install/generate)
 
-### 33. Pull secret parsing only supports `auth` field
-- **Problem**: `internal/registry/puller.go:169` — `authEntry` struct only reads the `Auth` (base64) field. Kubernetes pull secrets that use `username`/`password` fields directly are silently ignored.
-- **Files**: `internal/registry/puller.go`
-- **Work**: Support `username`/`password` fields as a fallback when `auth` is empty.
+### ~~33. Pull secret parsing only supports `auth` field~~ DONE
+- Added `Username` and `Password` fields to `authEntry` struct in `internal/registry/puller.go`
+- Added `resolvedAuth()` method that returns `Auth` if set, otherwise constructs base64-encoded `username:password`
+- Updated `Resolve()` in `pullSecretKeychain` to use `resolvedAuth()` for both direct and prefix-matched registry lookups
 
 ---
 
 ### Low Priority — Code Quality & UX
 
-### 34. Inconsistent error wrapping (`%w` vs `%v`)
-- **Problem**: Some functions use `fmt.Errorf("...: %w", err)` (proper wrapping), others use `%v` (loses error chain). This breaks `errors.Is()` / `errors.As()` checks.
-- **Files**: Various across `cmd/` and `internal/`
-- **Work**: Audit all `fmt.Errorf` calls and use `%w` consistently for wrapped errors.
+### ~~34. Inconsistent error wrapping (`%w` vs `%v`)~~ DONE
+- Audited all `fmt.Errorf` calls across `cmd/` and `internal/` — all error wrapping already uses `%w` consistently
+- No instances of `%v` used for error wrapping; `errors.Is()` / `errors.As()` chains are preserved throughout
 
 ### 35. Discovery API queried on every `discoverSearchableResources()` call
 - **Problem**: `internal/state/manager.go:265-304` queries `ServerGroupsAndResources()` on every call with no caching. For repeated `ListInstalled()` calls this is wasteful.
@@ -237,10 +240,12 @@ The following gaps were identified from a full codebase review covering all cmd/
 - **Files**: Missing `Dockerfile`
 - **Work**: Add a multi-stage Dockerfile that builds from source and produces a minimal scratch/distroless image.
 
-### 38. No GoReleaser configuration
-- **Problem**: Releases are manual (`make build-all && make checksums` then upload to GitHub). No changelog generation, no signed artifacts, no homebrew tap.
-- **Files**: Missing `.goreleaser.yml`
-- **Work**: Add GoReleaser config for automated multi-platform builds, checksums, changelogs, and GitHub Release publishing.
+### ~~38. No GoReleaser configuration~~ DONE
+- Added `.goreleaser.yml` with GoReleaser v2 format
+- Multi-platform builds: linux/darwin/windows × amd64/arm64 with CGO_ENABLED=0
+- Ldflags match Makefile: version, gitCommit, buildDate injected at build time
+- tar.gz archives (zip for Windows), SHA256 checksums, auto-generated changelog
+- GitHub Release publishing configured for `anandf/kubectl-catalog`
 
 ### 39. Symlink handling in tar extraction could be stricter
 - **Problem**: `internal/registry/untar.go:79-96` validates symlinks don't escape `destDir` but doesn't guard against symlink chains (symlink → symlink → escape) or circular symlinks.
