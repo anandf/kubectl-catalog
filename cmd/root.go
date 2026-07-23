@@ -45,19 +45,20 @@ var catalogTypes = map[string]struct {
 }
 
 var (
-	kubeconfig      string
-	namespace       string
-	ocpVersion      string
-	catalogType     string
-	clusterType     string
-	catalogOverride string
-	cacheDir        string
-	refreshCache    bool
-	pullSecretPath  string
-	timeout            time.Duration
-	dryRun             bool
-	noWait             bool
-	deploymentTimeout  time.Duration
+	kubeconfig        string
+	namespace         string
+	ocpVersion        string
+	catalogType       string
+	clusterType       string
+	catalogOverride   string
+	cacheDir          string
+	refreshCache      bool
+	pullSecretPath    string
+	timeout           time.Duration
+	dryRun            bool
+	noWait            bool
+	deploymentTimeout time.Duration
+	installationType  string
 )
 
 func init() {
@@ -74,6 +75,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "show what would be applied without making changes")
 	rootCmd.PersistentFlags().BoolVar(&noWait, "no-wait", false, "skip deployment readiness checks after install/upgrade")
 	rootCmd.PersistentFlags().DurationVar(&deploymentTimeout, "deployment-timeout", 0, "timeout for deployment readiness checks (defaults to 5m; use --no-wait to skip entirely)")
+	rootCmd.PersistentFlags().StringVar(&installationType, "installation-type", "direct", "installation method: direct (apply manifests) or olm (create OLM Subscription)")
 
 	registerStaticFlagCompletions()
 }
@@ -82,6 +84,17 @@ func init() {
 // OpenShift service-ca-operator (i.e. cluster-type is "k8s").
 func isVanillaK8s() bool {
 	return clusterType == "k8s"
+}
+
+func isOLMMode() bool {
+	return installationType == "olm"
+}
+
+func validateInstallationType() error {
+	if installationType != "direct" && installationType != "olm" {
+		return fmt.Errorf("invalid --installation-type %q (valid values: direct, olm)", installationType)
+	}
+	return nil
 }
 
 // resolveCatalogImage returns the catalog image to use.
@@ -280,6 +293,9 @@ func registerStaticFlagCompletions() {
 	})
 	rootCmd.RegisterFlagCompletionFunc("cluster-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"k8s", "ocp", "okd"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	rootCmd.RegisterFlagCompletionFunc("installation-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"direct", "olm"}, cobra.ShellCompDirectiveNoFileComp
 	})
 
 	for _, cmd := range []*cobra.Command{installCmd, upgradeCmd, generateCmd} {

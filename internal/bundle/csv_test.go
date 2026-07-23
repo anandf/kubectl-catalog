@@ -274,5 +274,461 @@ func makeObj(name string) *unstructured.Unstructured {
 	}
 }
 
+func newTestCSVWithWebhooks(t *testing.T, csvName string, deployments []interface{}, webhookDefs []interface{}) *unstructured.Unstructured {
+	t.Helper()
+	obj := map[string]interface{}{
+		"apiVersion": "operators.coreos.com/v1alpha1",
+		"kind":       "ClusterServiceVersion",
+		"metadata": map[string]interface{}{
+			"name": csvName,
+		},
+		"spec": map[string]interface{}{
+			"install": map[string]interface{}{
+				"strategy": "deployment",
+				"spec": map[string]interface{}{
+					"deployments": deployments,
+				},
+			},
+		},
+	}
+
+	if webhookDefs != nil {
+		obj["spec"].(map[string]interface{})["webhookdefinitions"] = webhookDefs
+	}
+
+	return &unstructured.Unstructured{Object: obj}
+}
+
+func TestExtractFromCSV_ValidatingAdmissionWebhook(t *testing.T) {
+	deployments := []interface{}{
+		map[string]interface{}{
+			"name": "controller-manager",
+			"spec": map[string]interface{}{
+				"replicas": int64(1),
+				"selector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{"control-plane": "controller-manager"},
+				},
+				"template": map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"labels": map[string]interface{}{
+							"control-plane": "controller-manager",
+						},
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "manager",
+								"image": "quay.io/example/operator:v1",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	webhookDefs := []interface{}{
+		map[string]interface{}{
+			"type":                     "ValidatingAdmissionWebhook",
+			"generateName":            "vfoo.example.com",
+			"deploymentName":          "controller-manager",
+			"containerPort":           int64(9443),
+			"sideEffects":             "None",
+			"failurePolicy":           "Fail",
+			"admissionReviewVersions": []interface{}{"v1", "v1beta1"},
+			"webhookPath":             "/validate-v1-foo",
+			"rules": []interface{}{
+				map[string]interface{}{
+					"apiGroups":   []interface{}{"example.com"},
+					"apiVersions": []interface{}{"v1"},
+					"operations":  []interface{}{"CREATE", "UPDATE"},
+					"resources":   []interface{}{"foos"},
+				},
+			},
+		},
+	}
+
+	csv := newTestCSVWithWebhooks(t, "my-operator.v1.0.0", deployments, webhookDefs)
+	manifests, err := extractFromCSV(csv)
+	if err != nil {
+		t.Fatalf("extractFromCSV() error: %v", err)
+	}
+
+	// Should have generated a Service
+	if len(manifests.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(manifests.Services))
+	}
+	svc := manifests.Services[0]
+	if svc.GetName() != "controller-manager-webhook-service" {
+		t.Errorf("service name = %q, want controller-manager-webhook-service", svc.GetName())
+	}
+	if svc.GetKind() != "Service" {
+		t.Errorf("service kind = %q, want Service", svc.GetKind())
+	}
+
+	// Verify service selector
+	selector, _, _ := unstructured.NestedStringMap(svc.Object, "spec", "selector")
+	if selector["control-plane"] != "controller-manager" {
+		t.Errorf("service selector = %v, want control-plane=controller-manager", selector)
+	}
+
+	// Verify service port
+	ports, _, _ := unstructured.NestedSlice(svc.Object, "spec", "ports")
+	if len(ports) != 1 {
+		t.Fatalf("expected 1 port, got %d", len(ports))
+	}
+	portMap := ports[0].(map[string]interface{})
+	portVal, _, _ := unstructured.NestedInt64(portMap, "port")
+	if int32(portVal) != 9443 {
+		t.Errorf("service port = %v, want 9443", portVal)
+	}
+
+	// Should have generated a ValidatingWebhookConfiguration in Other
+	if len(manifests.Other) != 1 {
+		t.Fatalf("expected 1 Other resource, got %d", len(manifests.Other))
+	}
+	whConfig := manifests.Other[0]
+	if whConfig.GetKind() != "ValidatingWebhookConfiguration" {
+		t.Errorf("webhook kind = %q, want ValidatingWebhookConfiguration", whConfig.GetKind())
+	}
+	if whConfig.GetName() != "vfoo.example.com" {
+		t.Errorf("webhook name = %q, want vfoo.example.com", whConfig.GetName())
+	}
+
+	// Verify webhook entry
+	webhooks, _, _ := unstructured.NestedSlice(whConfig.Object, "webhooks")
+	if len(webhooks) != 1 {
+		t.Fatalf("expected 1 webhook entry, got %d", len(webhooks))
+	}
+	wh := webhooks[0].(map[string]interface{})
+
+	svcName, _, _ := unstructured.NestedString(wh, "clientConfig", "service", "name")
+	if svcName != "controller-manager-webhook-service" {
+		t.Errorf("webhook service name = %q, want controller-manager-webhook-service", svcName)
+	}
+
+	whPath, _, _ := unstructured.NestedString(wh, "clientConfig", "service", "path")
+	if whPath != "/validate-v1-foo" {
+		t.Errorf("webhook path = %q, want /validate-v1-foo", whPath)
+	}
+
+	sideEffects, _, _ := unstructured.NestedString(wh, "sideEffects")
+	if sideEffects != "None" {
+		t.Errorf("sideEffects = %q, want None", sideEffects)
+	}
+
+	failurePolicy, _, _ := unstructured.NestedString(wh, "failurePolicy")
+	if failurePolicy != "Fail" {
+		t.Errorf("failurePolicy = %q, want Fail", failurePolicy)
+	}
+}
+
+func TestExtractFromCSV_MutatingAdmissionWebhook(t *testing.T) {
+	deployments := []interface{}{
+		map[string]interface{}{
+			"name": "controller-manager",
+			"spec": map[string]interface{}{
+				"replicas": int64(1),
+				"selector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{"app": "operator"},
+				},
+				"template": map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"labels": map[string]interface{}{"app": "operator"},
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "manager",
+								"image": "quay.io/example/operator:v1",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	webhookDefs := []interface{}{
+		map[string]interface{}{
+			"type":                     "MutatingAdmissionWebhook",
+			"generateName":            "mfoo.example.com",
+			"deploymentName":          "controller-manager",
+			"containerPort":           int64(9443),
+			"sideEffects":             "None",
+			"failurePolicy":           "Ignore",
+			"admissionReviewVersions": []interface{}{"v1"},
+			"webhookPath":             "/mutate-v1-foo",
+			"reinvocationPolicy":      "IfNeeded",
+			"timeoutSeconds":          int64(15),
+			"rules": []interface{}{
+				map[string]interface{}{
+					"apiGroups":   []interface{}{"example.com"},
+					"apiVersions": []interface{}{"v1"},
+					"operations":  []interface{}{"CREATE"},
+					"resources":   []interface{}{"foos"},
+				},
+			},
+		},
+	}
+
+	csv := newTestCSVWithWebhooks(t, "my-operator.v1.0.0", deployments, webhookDefs)
+	manifests, err := extractFromCSV(csv)
+	if err != nil {
+		t.Fatalf("extractFromCSV() error: %v", err)
+	}
+
+	if len(manifests.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(manifests.Services))
+	}
+
+	if len(manifests.Other) != 1 {
+		t.Fatalf("expected 1 Other resource, got %d", len(manifests.Other))
+	}
+	whConfig := manifests.Other[0]
+	if whConfig.GetKind() != "MutatingWebhookConfiguration" {
+		t.Errorf("webhook kind = %q, want MutatingWebhookConfiguration", whConfig.GetKind())
+	}
+	if whConfig.GetName() != "mfoo.example.com" {
+		t.Errorf("webhook name = %q, want mfoo.example.com", whConfig.GetName())
+	}
+
+	// Verify reinvocationPolicy and timeoutSeconds
+	webhooks, _, _ := unstructured.NestedSlice(whConfig.Object, "webhooks")
+	if len(webhooks) != 1 {
+		t.Fatalf("expected 1 webhook entry, got %d", len(webhooks))
+	}
+	wh := webhooks[0].(map[string]interface{})
+
+	reinvocation, _, _ := unstructured.NestedString(wh, "reinvocationPolicy")
+	if reinvocation != "IfNeeded" {
+		t.Errorf("reinvocationPolicy = %q, want IfNeeded", reinvocation)
+	}
+
+	failurePolicy, _, _ := unstructured.NestedString(wh, "failurePolicy")
+	if failurePolicy != "Ignore" {
+		t.Errorf("failurePolicy = %q, want Ignore", failurePolicy)
+	}
+
+	timeout, found, _ := unstructured.NestedInt64(wh, "timeoutSeconds")
+	if !found || timeout != 15 {
+		t.Errorf("timeoutSeconds = %d, want 15", timeout)
+	}
+}
+
+func TestExtractFromCSV_ConversionWebhook(t *testing.T) {
+	deployments := []interface{}{
+		map[string]interface{}{
+			"name": "controller-manager",
+			"spec": map[string]interface{}{
+				"replicas": int64(1),
+				"selector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{"app": "operator"},
+				},
+				"template": map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"labels": map[string]interface{}{"app": "operator"},
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "manager",
+								"image": "quay.io/example/operator:v1",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	webhookDefs := []interface{}{
+		map[string]interface{}{
+			"type":                     "ConversionWebhook",
+			"generateName":            "cfoo.example.com",
+			"deploymentName":          "controller-manager",
+			"containerPort":           int64(9443),
+			"sideEffects":             "None",
+			"admissionReviewVersions": []interface{}{"v1", "v1beta1"},
+			"webhookPath":             "/convert",
+			"conversionCRDs":          []interface{}{"foos.example.com", "bars.example.com"},
+		},
+	}
+
+	csv := newTestCSVWithWebhooks(t, "my-operator.v1.0.0", deployments, webhookDefs)
+	manifests, err := extractFromCSV(csv)
+	if err != nil {
+		t.Fatalf("extractFromCSV() error: %v", err)
+	}
+
+	// Should have generated a Service
+	if len(manifests.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(manifests.Services))
+	}
+
+	// Should NOT have generated any webhook configurations (conversion uses CRD patching)
+	if len(manifests.Other) != 0 {
+		t.Errorf("expected 0 Other resources for conversion webhook, got %d", len(manifests.Other))
+	}
+
+	// Should have 2 conversion webhook entries
+	if len(manifests.ConversionWebhooks) != 2 {
+		t.Fatalf("expected 2 ConversionWebhooks, got %d", len(manifests.ConversionWebhooks))
+	}
+
+	cw := manifests.ConversionWebhooks[0]
+	if cw.CRDName != "foos.example.com" {
+		t.Errorf("CRDName = %q, want foos.example.com", cw.CRDName)
+	}
+	if cw.ServiceName != "controller-manager-webhook-service" {
+		t.Errorf("ServiceName = %q, want controller-manager-webhook-service", cw.ServiceName)
+	}
+	if cw.WebhookPath != "/convert" {
+		t.Errorf("WebhookPath = %q, want /convert", cw.WebhookPath)
+	}
+	if cw.ContainerPort != 9443 {
+		t.Errorf("ContainerPort = %d, want 9443", cw.ContainerPort)
+	}
+	if len(cw.ConversionReviewVersions) != 2 || cw.ConversionReviewVersions[0] != "v1" {
+		t.Errorf("ConversionReviewVersions = %v, want [v1 v1beta1]", cw.ConversionReviewVersions)
+	}
+}
+
+func TestExtractFromCSV_ServiceDeduplication(t *testing.T) {
+	deployments := []interface{}{
+		map[string]interface{}{
+			"name": "controller-manager",
+			"spec": map[string]interface{}{
+				"replicas": int64(1),
+				"selector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{"app": "operator"},
+				},
+				"template": map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"labels": map[string]interface{}{"app": "operator"},
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "manager",
+								"image": "quay.io/example/operator:v1",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	webhookDefs := []interface{}{
+		map[string]interface{}{
+			"type":                     "ValidatingAdmissionWebhook",
+			"generateName":            "vfoo.example.com",
+			"deploymentName":          "controller-manager",
+			"containerPort":           int64(9443),
+			"sideEffects":             "None",
+			"failurePolicy":           "Fail",
+			"admissionReviewVersions": []interface{}{"v1"},
+			"webhookPath":             "/validate-v1-foo",
+			"rules": []interface{}{
+				map[string]interface{}{
+					"apiGroups":   []interface{}{"example.com"},
+					"apiVersions": []interface{}{"v1"},
+					"operations":  []interface{}{"CREATE"},
+					"resources":   []interface{}{"foos"},
+				},
+			},
+		},
+		map[string]interface{}{
+			"type":                     "MutatingAdmissionWebhook",
+			"generateName":            "mfoo.example.com",
+			"deploymentName":          "controller-manager",
+			"containerPort":           int64(9443),
+			"sideEffects":             "None",
+			"failurePolicy":           "Fail",
+			"admissionReviewVersions": []interface{}{"v1"},
+			"webhookPath":             "/mutate-v1-foo",
+			"rules": []interface{}{
+				map[string]interface{}{
+					"apiGroups":   []interface{}{"example.com"},
+					"apiVersions": []interface{}{"v1"},
+					"operations":  []interface{}{"CREATE"},
+					"resources":   []interface{}{"foos"},
+				},
+			},
+		},
+	}
+
+	csv := newTestCSVWithWebhooks(t, "my-operator.v1.0.0", deployments, webhookDefs)
+	manifests, err := extractFromCSV(csv)
+	if err != nil {
+		t.Fatalf("extractFromCSV() error: %v", err)
+	}
+
+	// Both webhooks target the same deployment, so only 1 Service should be generated
+	if len(manifests.Services) != 1 {
+		t.Errorf("expected 1 service (deduplicated), got %d", len(manifests.Services))
+	}
+
+	// Should have 2 webhook configurations
+	if len(manifests.Other) != 2 {
+		t.Errorf("expected 2 webhook configs, got %d", len(manifests.Other))
+	}
+
+	kinds := make(map[string]int)
+	for _, obj := range manifests.Other {
+		kinds[obj.GetKind()]++
+	}
+	if kinds["ValidatingWebhookConfiguration"] != 1 {
+		t.Errorf("expected 1 ValidatingWebhookConfiguration, got %d", kinds["ValidatingWebhookConfiguration"])
+	}
+	if kinds["MutatingWebhookConfiguration"] != 1 {
+		t.Errorf("expected 1 MutatingWebhookConfiguration, got %d", kinds["MutatingWebhookConfiguration"])
+	}
+}
+
+func TestExtractFromCSV_NoWebhookDefinitions(t *testing.T) {
+	deployments := []interface{}{
+		map[string]interface{}{
+			"name": "controller-manager",
+			"spec": map[string]interface{}{
+				"replicas": int64(1),
+				"selector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{"app": "operator"},
+				},
+				"template": map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"labels": map[string]interface{}{"app": "operator"},
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "manager",
+								"image": "quay.io/example/operator:v1",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	csv := newTestCSVWithWebhooks(t, "my-operator.v1.0.0", deployments, nil)
+	manifests, err := extractFromCSV(csv)
+	if err != nil {
+		t.Fatalf("extractFromCSV() error: %v", err)
+	}
+
+	if len(manifests.Services) != 0 {
+		t.Errorf("expected 0 services, got %d", len(manifests.Services))
+	}
+	if len(manifests.Other) != 0 {
+		t.Errorf("expected 0 Other, got %d", len(manifests.Other))
+	}
+	if len(manifests.ConversionWebhooks) != 0 {
+		t.Errorf("expected 0 ConversionWebhooks, got %d", len(manifests.ConversionWebhooks))
+	}
+}
+
 // Ensure json import is used (for mustMarshal-style helpers if needed)
 var _ = json.Marshal

@@ -41,8 +41,16 @@ If the operator is already installed, use --force to re-install.`,
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
+		if err := validateInstallationType(); err != nil {
+			return err
+		}
+
 		if dryRun {
 			fmt.Println("Running in dry-run mode — no changes will be made to the cluster")
+		}
+
+		if isOLMMode() {
+			return installViaOLM(cmd, ctx, packageName)
 		}
 
 		// Check if already installed

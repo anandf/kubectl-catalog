@@ -37,8 +37,16 @@ prompt requires you to type "yes" before proceeding.`,
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
+		if err := validateInstallationType(); err != nil {
+			return err
+		}
+
 		if dryRun {
 			fmt.Println("Running in dry-run mode — no changes will be made to the cluster")
+		}
+
+		if isOLMMode() {
+			return uninstallViaOLM(cmd, ctx, packageName)
 		}
 
 		stateManager, err := state.NewManager(kubeconfig, namespace)

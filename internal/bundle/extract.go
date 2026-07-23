@@ -24,6 +24,17 @@ type InstallMode struct {
 	Supported bool
 }
 
+// ConversionWebhookInfo holds the information needed to patch a CRD with
+// conversion webhook configuration. This is extracted from the CSV's
+// spec.webhookdefinitions entries of type ConversionWebhook.
+type ConversionWebhookInfo struct {
+	CRDName                  string
+	ServiceName              string
+	WebhookPath              string
+	ContainerPort            int32
+	ConversionReviewVersions []string
+}
+
 // Manifests holds the extracted and transformed Kubernetes resources from a bundle.
 type Manifests struct {
 	CRDs        []*unstructured.Unstructured
@@ -38,6 +49,10 @@ type Manifests struct {
 
 	// InstallModes lists the install modes declared in the CSV's spec.installModes.
 	InstallModes []InstallMode
+
+	// ConversionWebhooks holds conversion webhook info extracted from the CSV's
+	// spec.webhookdefinitions. These are used to patch CRDs with conversion config.
+	ConversionWebhooks []ConversionWebhookInfo
 }
 
 // SupportsInstallMode returns true if the bundle supports the given install mode type.
@@ -141,6 +156,8 @@ func Extract(bundleDir string) (*Manifests, error) {
 				manifests.Deployments = append(manifests.Deployments, extracted.Deployments...)
 				manifests.RBAC = append(manifests.RBAC, extracted.RBAC...)
 				manifests.Services = append(manifests.Services, extracted.Services...)
+				manifests.Other = append(manifests.Other, extracted.Other...)
+				manifests.ConversionWebhooks = append(manifests.ConversionWebhooks, extracted.ConversionWebhooks...)
 				if extracted.SuggestedNamespace != "" {
 					manifests.SuggestedNamespace = extracted.SuggestedNamespace
 				}
@@ -159,7 +176,61 @@ func Extract(bundleDir string) (*Manifests, error) {
 		return nil, fmt.Errorf("walking bundle directory %s: %w", manifestDir, err)
 	}
 
+	// Patch CRDs with conversion webhook configuration from CSV webhookdefinitions
+	patchCRDsForConversionWebhooks(manifests)
+
 	return manifests, nil
+}
+
+// patchCRDsForConversionWebhooks sets spec.conversion on CRDs that are
+// referenced by ConversionWebhook entries in the CSV's webhookdefinitions.
+// CRDs that already have spec.conversion.webhook configured are left untouched.
+func patchCRDsForConversionWebhooks(m *Manifests) {
+	if len(m.ConversionWebhooks) == 0 {
+		return
+	}
+
+	// Index conversion webhooks by CRD name
+	convByName := make(map[string]ConversionWebhookInfo)
+	for _, cw := range m.ConversionWebhooks {
+		convByName[cw.CRDName] = cw
+	}
+
+	for _, crd := range m.CRDs {
+		cw, ok := convByName[crd.GetName()]
+		if !ok {
+			continue
+		}
+
+		// Skip CRDs that already have conversion webhook configured
+		_, exists, _ := unstructured.NestedMap(crd.Object, "spec", "conversion", "webhook")
+		if exists {
+			continue
+		}
+
+		reviewVersions := make([]interface{}, len(cw.ConversionReviewVersions))
+		for i, v := range cw.ConversionReviewVersions {
+			reviewVersions[i] = v
+		}
+		if len(reviewVersions) == 0 {
+			reviewVersions = []interface{}{"v1"}
+		}
+
+		conversion := map[string]interface{}{
+			"strategy": "Webhook",
+			"webhook": map[string]interface{}{
+				"clientConfig": map[string]interface{}{
+					"service": map[string]interface{}{
+						"name": cw.ServiceName,
+						"path": cw.WebhookPath,
+						"port": int64(cw.ContainerPort),
+					},
+				},
+				"conversionReviewVersions": reviewVersions,
+			},
+		}
+		unstructured.SetNestedField(crd.Object, conversion, "spec", "conversion")
+	}
 }
 
 // splitYAMLDocuments splits raw YAML data on "---" document separators.

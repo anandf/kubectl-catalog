@@ -619,3 +619,227 @@ func getContainerEnv(t *testing.T, dep *unstructured.Unstructured, idx int) []in
 	env, _ := c["env"].([]interface{})
 	return env
 }
+
+func TestPatchCRDsForConversionWebhooks(t *testing.T) {
+	crd := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "apiextensions.k8s.io/v1",
+			"kind":       "CustomResourceDefinition",
+			"metadata":   map[string]interface{}{"name": "foos.example.com"},
+			"spec": map[string]interface{}{
+				"group": "example.com",
+				"names": map[string]interface{}{
+					"kind":   "Foo",
+					"plural": "foos",
+				},
+			},
+		},
+	}
+
+	m := &Manifests{
+		CRDs: []*unstructured.Unstructured{crd},
+		ConversionWebhooks: []ConversionWebhookInfo{
+			{
+				CRDName:                  "foos.example.com",
+				ServiceName:              "controller-manager-webhook-service",
+				WebhookPath:              "/convert",
+				ContainerPort:            9443,
+				ConversionReviewVersions: []string{"v1", "v1beta1"},
+			},
+		},
+	}
+
+	patchCRDsForConversionWebhooks(m)
+
+	strategy, found, _ := unstructured.NestedString(crd.Object, "spec", "conversion", "strategy")
+	if !found || strategy != "Webhook" {
+		t.Errorf("conversion strategy = %q, want Webhook", strategy)
+	}
+
+	svcName, found, _ := unstructured.NestedString(crd.Object, "spec", "conversion", "webhook", "clientConfig", "service", "name")
+	if !found || svcName != "controller-manager-webhook-service" {
+		t.Errorf("conversion service name = %q, want controller-manager-webhook-service", svcName)
+	}
+
+	path, _, _ := unstructured.NestedString(crd.Object, "spec", "conversion", "webhook", "clientConfig", "service", "path")
+	if path != "/convert" {
+		t.Errorf("conversion path = %q, want /convert", path)
+	}
+
+	port, _, _ := unstructured.NestedInt64(crd.Object, "spec", "conversion", "webhook", "clientConfig", "service", "port")
+	if port != 9443 {
+		t.Errorf("conversion port = %d, want 9443", port)
+	}
+
+	versions, found, _ := unstructured.NestedSlice(crd.Object, "spec", "conversion", "webhook", "conversionReviewVersions")
+	if !found || len(versions) != 2 {
+		t.Fatalf("expected 2 review versions, got %d", len(versions))
+	}
+	if versions[0] != "v1" || versions[1] != "v1beta1" {
+		t.Errorf("review versions = %v, want [v1 v1beta1]", versions)
+	}
+}
+
+func TestPatchCRDsForConversionWebhooks_SkipsExisting(t *testing.T) {
+	crd := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "apiextensions.k8s.io/v1",
+			"kind":       "CustomResourceDefinition",
+			"metadata":   map[string]interface{}{"name": "foos.example.com"},
+			"spec": map[string]interface{}{
+				"group": "example.com",
+				"conversion": map[string]interface{}{
+					"strategy": "Webhook",
+					"webhook": map[string]interface{}{
+						"clientConfig": map[string]interface{}{
+							"service": map[string]interface{}{
+								"name": "existing-service",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	m := &Manifests{
+		CRDs: []*unstructured.Unstructured{crd},
+		ConversionWebhooks: []ConversionWebhookInfo{
+			{
+				CRDName:     "foos.example.com",
+				ServiceName: "new-service",
+			},
+		},
+	}
+
+	patchCRDsForConversionWebhooks(m)
+
+	// Should NOT have been patched — existing config preserved
+	svcName, _, _ := unstructured.NestedString(crd.Object, "spec", "conversion", "webhook", "clientConfig", "service", "name")
+	if svcName != "existing-service" {
+		t.Errorf("expected existing-service to be preserved, got %q", svcName)
+	}
+}
+
+func TestPatchCRDsForConversionWebhooks_NoMatch(t *testing.T) {
+	crd := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "apiextensions.k8s.io/v1",
+			"kind":       "CustomResourceDefinition",
+			"metadata":   map[string]interface{}{"name": "bars.example.com"},
+			"spec":       map[string]interface{}{"group": "example.com"},
+		},
+	}
+
+	m := &Manifests{
+		CRDs: []*unstructured.Unstructured{crd},
+		ConversionWebhooks: []ConversionWebhookInfo{
+			{
+				CRDName:     "foos.example.com",
+				ServiceName: "controller-manager-webhook-service",
+			},
+		},
+	}
+
+	patchCRDsForConversionWebhooks(m)
+
+	// Should not have conversion set
+	_, found, _ := unstructured.NestedMap(crd.Object, "spec", "conversion")
+	if found {
+		t.Error("CRD should not have been patched (name doesn't match)")
+	}
+}
+
+func TestExtract_CSVWithWebhooksAndCRD(t *testing.T) {
+	bundleDir := t.TempDir()
+	manifestDir := filepath.Join(bundleDir, "manifests")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	csvYAML := `apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  name: my-operator.v1.0.0
+spec:
+  install:
+    strategy: deployment
+    spec:
+      deployments:
+      - name: controller-manager
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: operator
+          template:
+            metadata:
+              labels:
+                app: operator
+            spec:
+              containers:
+              - name: manager
+                image: quay.io/example/operator:v1
+  webhookdefinitions:
+  - type: ConversionWebhook
+    generateName: cfoo.example.com
+    deploymentName: controller-manager
+    containerPort: 9443
+    sideEffects: None
+    admissionReviewVersions:
+    - v1
+    webhookPath: /convert
+    conversionCRDs:
+    - foos.example.com`
+
+	crdYAML := `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: foos.example.com
+spec:
+  group: example.com
+  names:
+    kind: Foo
+    plural: foos
+  scope: Namespaced
+  versions:
+  - name: v1
+    served: true
+    storage: true
+  - name: v1beta1
+    served: true
+    storage: false`
+
+	os.WriteFile(filepath.Join(manifestDir, "csv.yaml"), []byte(csvYAML), 0o644)
+	os.WriteFile(filepath.Join(manifestDir, "crd.yaml"), []byte(crdYAML), 0o644)
+
+	manifests, err := Extract(bundleDir)
+	if err != nil {
+		t.Fatalf("Extract() error: %v", err)
+	}
+
+	// CRD should be patched with conversion webhook
+	if len(manifests.CRDs) != 1 {
+		t.Fatalf("expected 1 CRD, got %d", len(manifests.CRDs))
+	}
+
+	strategy, found, _ := unstructured.NestedString(manifests.CRDs[0].Object, "spec", "conversion", "strategy")
+	if !found || strategy != "Webhook" {
+		t.Errorf("CRD conversion strategy = %q, want Webhook", strategy)
+	}
+
+	svcName, found, _ := unstructured.NestedString(manifests.CRDs[0].Object, "spec", "conversion", "webhook", "clientConfig", "service", "name")
+	if !found || svcName != "controller-manager-webhook-service" {
+		t.Errorf("CRD conversion service = %q, want controller-manager-webhook-service", svcName)
+	}
+
+	// Should have the generated Service
+	if len(manifests.Services) != 1 {
+		t.Errorf("expected 1 service, got %d", len(manifests.Services))
+	}
+
+	// Deployment should be extracted from CSV
+	if len(manifests.Deployments) != 1 {
+		t.Errorf("expected 1 deployment, got %d", len(manifests.Deployments))
+	}
+}

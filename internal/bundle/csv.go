@@ -3,13 +3,16 @@ package bundle
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // extractFromCSV extracts Kubernetes resources from a ClusterServiceVersion.
@@ -91,6 +94,17 @@ func extractFromCSV(csv *unstructured.Unstructured) (*Manifests, error) {
 			return nil, fmt.Errorf("converting permissions: %w", err)
 		}
 		manifests.RBAC = append(manifests.RBAC, rbac...)
+	}
+
+	// Extract webhook definitions and generate Service + webhook configuration resources
+	webhookDefs, found, err := unstructured.NestedSlice(csv.Object, "spec", "webhookdefinitions")
+	if err != nil {
+		return nil, fmt.Errorf("reading webhookdefinitions from CSV: %w", err)
+	}
+	if found && len(webhookDefs) > 0 {
+		if err := extractWebhookDefinitions(webhookDefs, manifests); err != nil {
+			return nil, fmt.Errorf("converting webhookdefinitions: %w", err)
+		}
 	}
 
 	return manifests, nil
@@ -315,4 +329,307 @@ func toUnstructured(obj interface{}) (*unstructured.Unstructured, error) {
 		return nil, fmt.Errorf("converting to unstructured: %w", err)
 	}
 	return &unstructured.Unstructured{Object: data}, nil
+}
+
+// extractWebhookDefinitions processes the CSV's spec.webhookdefinitions array
+// and generates the equivalent Kubernetes resources:
+//   - Service resources to route traffic to operator deployments
+//   - ValidatingWebhookConfiguration / MutatingWebhookConfiguration resources
+//   - ConversionWebhookInfo entries for CRD patching
+//
+// This replicates what OLM does when it processes webhookdefinitions.
+func extractWebhookDefinitions(webhookDefs []interface{}, manifests *Manifests) error {
+	// Build a map of deploymentName -> pod template labels from CSV deployments
+	// so generated Services can select the correct pods.
+	deploymentLabels := make(map[string]map[string]string)
+	for _, dep := range manifests.Deployments {
+		name := dep.GetName()
+		labels, _, _ := unstructured.NestedStringMap(dep.Object, "spec", "template", "metadata", "labels")
+		if len(labels) > 0 {
+			deploymentLabels[name] = labels
+		}
+	}
+
+	// Track generated services by deployment name to avoid duplicates
+	generatedServices := make(map[string]string) // deploymentName -> serviceName
+
+	for _, wd := range webhookDefs {
+		wdMap, ok := wd.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		whType, _ := wdMap["type"].(string)
+		deploymentName, _ := wdMap["deploymentName"].(string)
+		if deploymentName == "" {
+			return fmt.Errorf("webhookdefinition is missing required 'deploymentName' field")
+		}
+
+		containerPort := toInt32(wdMap["containerPort"], 443)
+		serviceName := deploymentName + "-webhook-service"
+
+		// Generate the Service if not already created for this deployment
+		if _, exists := generatedServices[deploymentName]; !exists {
+			selector := deploymentLabels[deploymentName]
+			if len(selector) == 0 {
+				selector = map[string]string{"app": deploymentName}
+			}
+
+			svc, err := buildWebhookService(serviceName, containerPort, selector)
+			if err != nil {
+				return fmt.Errorf("building service for deployment %q: %w", deploymentName, err)
+			}
+			manifests.Services = append(manifests.Services, svc)
+			generatedServices[deploymentName] = serviceName
+		}
+
+		switch whType {
+		case "ValidatingAdmissionWebhook":
+			whConfig, err := buildAdmissionWebhookConfig(wdMap, serviceName, containerPort, false)
+			if err != nil {
+				return fmt.Errorf("building validating webhook config: %w", err)
+			}
+			manifests.Other = append(manifests.Other, whConfig)
+
+		case "MutatingAdmissionWebhook":
+			whConfig, err := buildAdmissionWebhookConfig(wdMap, serviceName, containerPort, true)
+			if err != nil {
+				return fmt.Errorf("building mutating webhook config: %w", err)
+			}
+			manifests.Other = append(manifests.Other, whConfig)
+
+		case "ConversionWebhook":
+			conversionCRDs, _ := wdMap["conversionCRDs"].([]interface{})
+			webhookPath, _ := wdMap["webhookPath"].(string)
+			reviewVersions := toStringSlice(wdMap["admissionReviewVersions"])
+
+			for _, crd := range conversionCRDs {
+				crdName, ok := crd.(string)
+				if !ok || crdName == "" {
+					continue
+				}
+				manifests.ConversionWebhooks = append(manifests.ConversionWebhooks, ConversionWebhookInfo{
+					CRDName:                  crdName,
+					ServiceName:              serviceName,
+					WebhookPath:              webhookPath,
+					ContainerPort:            containerPort,
+					ConversionReviewVersions: reviewVersions,
+				})
+			}
+
+		default:
+			return fmt.Errorf("unknown webhook type %q", whType)
+		}
+	}
+
+	return nil
+}
+
+func buildWebhookService(name string, port int32, selector map[string]string) (*unstructured.Unstructured, error) {
+	svc := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Service",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{
+				{
+					Port:       port,
+					TargetPort: intstr.FromInt32(port),
+					Protocol:   corev1.ProtocolTCP,
+				},
+			},
+			Selector: selector,
+		},
+	}
+	return toUnstructured(svc)
+}
+
+func buildAdmissionWebhookConfig(wdMap map[string]interface{}, serviceName string, port int32, isMutating bool) (*unstructured.Unstructured, error) {
+	generateName, _ := wdMap["generateName"].(string)
+	name := strings.TrimRight(generateName, ".")
+	if name == "" {
+		return nil, fmt.Errorf("webhookdefinition is missing required 'generateName' field")
+	}
+
+	webhookPath, _ := wdMap["webhookPath"].(string)
+	sideEffects := toSideEffectClass(wdMap["sideEffects"])
+	failurePolicy := toFailurePolicy(wdMap["failurePolicy"])
+	reviewVersions := toStringSlice(wdMap["admissionReviewVersions"])
+	if len(reviewVersions) == 0 {
+		reviewVersions = []string{"v1"}
+	}
+
+	// Build rules
+	var rules []admissionregistrationv1.RuleWithOperations
+	if rawRules, ok := wdMap["rules"].([]interface{}); ok {
+		rulesData, err := json.Marshal(rawRules)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling webhook rules: %w", err)
+		}
+		if err := json.Unmarshal(rulesData, &rules); err != nil {
+			return nil, fmt.Errorf("unmarshaling webhook rules: %w", err)
+		}
+	}
+
+	servicePort := int32(port)
+	webhook := admissionregistrationv1.WebhookClientConfig{
+		Service: &admissionregistrationv1.ServiceReference{
+			Name: serviceName,
+			Path: &webhookPath,
+			Port: &servicePort,
+		},
+	}
+
+	if isMutating {
+		reinvocationPolicy := admissionregistrationv1.NeverReinvocationPolicy
+		if rp, ok := wdMap["reinvocationPolicy"].(string); ok && rp != "" {
+			reinvocationPolicy = admissionregistrationv1.ReinvocationPolicyType(rp)
+		}
+
+		matchPolicy := admissionregistrationv1.Equivalent
+		if mp, ok := wdMap["matchPolicy"].(string); ok && mp != "" {
+			matchPolicy = admissionregistrationv1.MatchPolicyType(mp)
+		}
+
+		whEntry := admissionregistrationv1.MutatingWebhook{
+			Name:                    generateName,
+			ClientConfig:            webhook,
+			Rules:                   rules,
+			FailurePolicy:           &failurePolicy,
+			SideEffects:             &sideEffects,
+			AdmissionReviewVersions: reviewVersions,
+			ReinvocationPolicy:      &reinvocationPolicy,
+			MatchPolicy:             &matchPolicy,
+		}
+
+		if timeout := toInt32Ptr(wdMap["timeoutSeconds"]); timeout != nil {
+			whEntry.TimeoutSeconds = timeout
+		}
+		if objSel := toLabelSelector(wdMap["objectSelector"]); objSel != nil {
+			whEntry.ObjectSelector = objSel
+		}
+
+		cfg := &admissionregistrationv1.MutatingWebhookConfiguration{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "admissionregistration.k8s.io/v1",
+				Kind:       "MutatingWebhookConfiguration",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name,
+			},
+			Webhooks: []admissionregistrationv1.MutatingWebhook{whEntry},
+		}
+		return toUnstructured(cfg)
+	}
+
+	// Validating
+	matchPolicy := admissionregistrationv1.Equivalent
+	if mp, ok := wdMap["matchPolicy"].(string); ok && mp != "" {
+		matchPolicy = admissionregistrationv1.MatchPolicyType(mp)
+	}
+
+	whEntry := admissionregistrationv1.ValidatingWebhook{
+		Name:                    generateName,
+		ClientConfig:            webhook,
+		Rules:                   rules,
+		FailurePolicy:           &failurePolicy,
+		SideEffects:             &sideEffects,
+		AdmissionReviewVersions: reviewVersions,
+		MatchPolicy:             &matchPolicy,
+	}
+
+	if timeout := toInt32Ptr(wdMap["timeoutSeconds"]); timeout != nil {
+		whEntry.TimeoutSeconds = timeout
+	}
+	if objSel := toLabelSelector(wdMap["objectSelector"]); objSel != nil {
+		whEntry.ObjectSelector = objSel
+	}
+
+	cfg := &admissionregistrationv1.ValidatingWebhookConfiguration{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "admissionregistration.k8s.io/v1",
+			Kind:       "ValidatingWebhookConfiguration",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Webhooks: []admissionregistrationv1.ValidatingWebhook{whEntry},
+	}
+	return toUnstructured(cfg)
+}
+
+func toInt32(v interface{}, defaultVal int32) int32 {
+	switch n := v.(type) {
+	case int64:
+		return int32(n)
+	case float64:
+		return int32(n)
+	case int32:
+		return n
+	case int:
+		return int32(n)
+	default:
+		return defaultVal
+	}
+}
+
+func toInt32Ptr(v interface{}) *int32 {
+	switch n := v.(type) {
+	case int64:
+		val := int32(n)
+		return &val
+	case float64:
+		val := int32(n)
+		return &val
+	default:
+		return nil
+	}
+}
+
+func toStringSlice(v interface{}) []string {
+	items, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	var result []string
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+func toSideEffectClass(v interface{}) admissionregistrationv1.SideEffectClass {
+	if s, ok := v.(string); ok && s != "" {
+		return admissionregistrationv1.SideEffectClass(s)
+	}
+	return admissionregistrationv1.SideEffectClassNone
+}
+
+func toFailurePolicy(v interface{}) admissionregistrationv1.FailurePolicyType {
+	if s, ok := v.(string); ok && s != "" {
+		return admissionregistrationv1.FailurePolicyType(s)
+	}
+	return admissionregistrationv1.Fail
+}
+
+func toLabelSelector(v interface{}) *metav1.LabelSelector {
+	m, ok := v.(map[string]interface{})
+	if !ok || len(m) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	sel := &metav1.LabelSelector{}
+	if err := json.Unmarshal(data, sel); err != nil {
+		return nil
+	}
+	return sel
 }
