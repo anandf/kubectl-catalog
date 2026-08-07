@@ -195,8 +195,8 @@ func TestExtractFromCSVEmpty(t *testing.T) {
 
 func TestClassifyAndAdd(t *testing.T) {
 	tests := []struct {
-		kind     string
-		apiGroup string
+		kind      string
+		apiGroup  string
 		wantField string
 	}{
 		{"CustomResourceDefinition", "apiextensions.k8s.io/v1", "CRDs"},
@@ -329,7 +329,7 @@ func TestExtractFromCSV_ValidatingAdmissionWebhook(t *testing.T) {
 
 	webhookDefs := []interface{}{
 		map[string]interface{}{
-			"type":                     "ValidatingAdmissionWebhook",
+			"type":                    "ValidatingAdmissionWebhook",
 			"generateName":            "vfoo.example.com",
 			"deploymentName":          "controller-manager",
 			"containerPort":           int64(9443),
@@ -451,7 +451,7 @@ func TestExtractFromCSV_MutatingAdmissionWebhook(t *testing.T) {
 
 	webhookDefs := []interface{}{
 		map[string]interface{}{
-			"type":                     "MutatingAdmissionWebhook",
+			"type":                    "MutatingAdmissionWebhook",
 			"generateName":            "mfoo.example.com",
 			"deploymentName":          "controller-manager",
 			"containerPort":           int64(9443),
@@ -544,7 +544,7 @@ func TestExtractFromCSV_ConversionWebhook(t *testing.T) {
 
 	webhookDefs := []interface{}{
 		map[string]interface{}{
-			"type":                     "ConversionWebhook",
+			"type":                    "ConversionWebhook",
 			"generateName":            "cfoo.example.com",
 			"deploymentName":          "controller-manager",
 			"containerPort":           int64(9443),
@@ -622,7 +622,7 @@ func TestExtractFromCSV_ServiceDeduplication(t *testing.T) {
 
 	webhookDefs := []interface{}{
 		map[string]interface{}{
-			"type":                     "ValidatingAdmissionWebhook",
+			"type":                    "ValidatingAdmissionWebhook",
 			"generateName":            "vfoo.example.com",
 			"deploymentName":          "controller-manager",
 			"containerPort":           int64(9443),
@@ -640,7 +640,7 @@ func TestExtractFromCSV_ServiceDeduplication(t *testing.T) {
 			},
 		},
 		map[string]interface{}{
-			"type":                     "MutatingAdmissionWebhook",
+			"type":                    "MutatingAdmissionWebhook",
 			"generateName":            "mfoo.example.com",
 			"deploymentName":          "controller-manager",
 			"containerPort":           int64(9443),

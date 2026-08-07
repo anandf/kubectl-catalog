@@ -29,7 +29,6 @@ const (
 	defaultCRDEstablishTimeout    = 60 * time.Second
 	defaultDeploymentReadyTimeout = 5 * time.Minute
 	pollInterval                  = 2 * time.Second
-
 )
 
 // PullSecretName returns the name of the image pull secret for a given package.

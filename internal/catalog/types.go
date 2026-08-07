@@ -13,9 +13,9 @@ type FBC struct {
 	Bundles  []Bundle
 
 	// indexes built by BuildIndexes for fast lookups
-	packageIndex map[string]int            // name -> index in Packages
-	bundleIndex  map[string]int            // name -> index in Bundles
-	channelIndex map[string][]int          // packageName -> indices in Channels
+	packageIndex map[string]int   // name -> index in Packages
+	bundleIndex  map[string]int   // name -> index in Bundles
+	channelIndex map[string][]int // packageName -> indices in Channels
 }
 
 // Package represents an olm.package entry in the catalog.

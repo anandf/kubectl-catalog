@@ -10,8 +10,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
-	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/restmapper"
+	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/anandf/kubectl-catalog/internal/bundle"
 	"github.com/anandf/kubectl-catalog/internal/state"
@@ -75,19 +75,19 @@ func newTestApplier(ns string, objects ...runtime.Object) *Applier {
 	mapper := restmapper.NewDiscoveryRESTMapper(resources)
 
 	gvrToListKind := map[schema.GroupVersionResource]string{
-		{Group: "", Version: "v1", Resource: "namespaces"}:                                                                                      "NamespaceList",
-		{Group: "", Version: "v1", Resource: "secrets"}:                                                                                         "SecretList",
-		{Group: "", Version: "v1", Resource: "serviceaccounts"}:                                                                                 "ServiceAccountList",
-		{Group: "", Version: "v1", Resource: "services"}:                                                                                        "ServiceList",
-		{Group: "", Version: "v1", Resource: "configmaps"}:                                                                                      "ConfigMapList",
-		{Group: "apps", Version: "v1", Resource: "deployments"}:                                                                                 "DeploymentList",
-		{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterroles"}:                                                           "ClusterRoleList",
-		{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterrolebindings"}:                                                    "ClusterRoleBindingList",
-		{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "roles"}:                                                                  "RoleList",
-		{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "rolebindings"}:                                                           "RoleBindingList",
-		{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}:                                                   "CustomResourceDefinitionList",
-		{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}:                                     "ValidatingWebhookConfigurationList",
-		{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}:                                       "MutatingWebhookConfigurationList",
+		{Group: "", Version: "v1", Resource: "namespaces"}:                                                  "NamespaceList",
+		{Group: "", Version: "v1", Resource: "secrets"}:                                                     "SecretList",
+		{Group: "", Version: "v1", Resource: "serviceaccounts"}:                                             "ServiceAccountList",
+		{Group: "", Version: "v1", Resource: "services"}:                                                    "ServiceList",
+		{Group: "", Version: "v1", Resource: "configmaps"}:                                                  "ConfigMapList",
+		{Group: "apps", Version: "v1", Resource: "deployments"}:                                             "DeploymentList",
+		{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterroles"}:                       "ClusterRoleList",
+		{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterrolebindings"}:                "ClusterRoleBindingList",
+		{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "roles"}:                              "RoleList",
+		{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "rolebindings"}:                       "RoleBindingList",
+		{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}:               "CustomResourceDefinitionList",
+		{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}: "ValidatingWebhookConfigurationList",
+		{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}:   "MutatingWebhookConfigurationList",
 	}
 	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind, objects...)
 

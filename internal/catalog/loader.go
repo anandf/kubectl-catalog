@@ -183,5 +183,3 @@ func Load(ctx context.Context, imageRef string, refresh bool, puller *registry.I
 
 	return LoadFromDirectory(catalogDir)
 }
-
-

@@ -368,7 +368,7 @@ func (m *Manager) ensureSubscription(ctx context.Context, packageName, channel, 
 	existing, err := resource.Get(ctx, packageName, metav1.GetOptions{})
 	if err == nil && !force {
 		currentChannel, _, _ := unstructured.NestedString(existing.Object, "spec", "channel")
-		return fmt.Errorf("Subscription %q already exists (channel: %s); use --force to re-create", packageName, currentChannel)
+		return fmt.Errorf("subscription %q already exists (channel: %s); use --force to re-create", packageName, currentChannel)
 	}
 
 	sub := NewSubscription(packageName, m.namespace, channel, catalogSourceName, m.namespace, startingCSV)

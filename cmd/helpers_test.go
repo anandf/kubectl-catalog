@@ -11,13 +11,13 @@ import (
 
 func TestResolveCatalogImage(t *testing.T) {
 	tests := []struct {
-		name         string
-		cmdCatalog   string
-		catOverride  string
-		catType      string
-		ocpVer       string
-		want         string
-		wantErr      bool
+		name        string
+		cmdCatalog  string
+		catOverride string
+		catType     string
+		ocpVer      string
+		want        string
+		wantErr     bool
 	}{
 		{
 			name:       "command catalog override takes precedence",
@@ -548,9 +548,9 @@ func TestDetermineOperatorNamespace(t *testing.T) {
 			want: "the-ns",
 		},
 		{
-			name: "empty resources",
+			name:      "empty resources",
 			resources: []unstructured.Unstructured{},
-			want: "",
+			want:      "",
 		},
 		{
 			name: "all cluster-scoped",
@@ -574,9 +574,9 @@ func TestDetermineOperatorNamespace(t *testing.T) {
 
 func TestClassifyResource(t *testing.T) {
 	tests := []struct {
-		name       string
-		kind       string
-		wantField  string
+		name      string
+		kind      string
+		wantField string
 	}{
 		{"CRD", "CustomResourceDefinition", "CRDs"},
 		{"ClusterRole", "ClusterRole", "RBAC"},
@@ -814,7 +814,7 @@ func TestSanitizeOCITag(t *testing.T) {
 
 func TestSplitImageRef(t *testing.T) {
 	tests := []struct {
-		ref     string
+		ref      string
 		wantRepo string
 		wantTag  string
 	}{
@@ -840,12 +840,12 @@ func TestSplitImageRef(t *testing.T) {
 
 func TestResolveOCIRef(t *testing.T) {
 	tests := []struct {
-		name           string
-		ref            string
-		version        string // simulates --version flag
-		metaVersion    string
-		metaChannel    string
-		want           string
+		name        string
+		ref         string
+		version     string // simulates --version flag
+		metaVersion string
+		metaChannel string
+		want        string
 	}{
 		{
 			name:        "explicit tag unchanged",

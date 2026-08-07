@@ -16,12 +16,12 @@ import (
 func newFakeDynamicClient(objects ...runtime.Object) *dynamicfake.FakeDynamicClient {
 	scheme := runtime.NewScheme()
 	gvrToListKind := map[k8sschema.GroupVersionResource]string{
-		{Group: "", Version: "v1", Resource: "namespaces"}:                                              "NamespaceList",
-		{Group: "", Version: "v1", Resource: "secrets"}:                                                 "SecretList",
-		{Group: "operators.coreos.com", Version: "v1alpha1", Resource: "subscriptions"}:                 "SubscriptionList",
-		{Group: "operators.coreos.com", Version: "v1alpha1", Resource: "catalogsources"}:                "CatalogSourceList",
-		{Group: "operators.coreos.com", Version: "v1alpha1", Resource: "clusterserviceversions"}:        "ClusterServiceVersionList",
-		{Group: "operators.coreos.com", Version: "v1", Resource: "operatorgroups"}:                      "OperatorGroupList",
+		{Group: "", Version: "v1", Resource: "namespaces"}:                                       "NamespaceList",
+		{Group: "", Version: "v1", Resource: "secrets"}:                                          "SecretList",
+		{Group: "operators.coreos.com", Version: "v1alpha1", Resource: "subscriptions"}:          "SubscriptionList",
+		{Group: "operators.coreos.com", Version: "v1alpha1", Resource: "catalogsources"}:         "CatalogSourceList",
+		{Group: "operators.coreos.com", Version: "v1alpha1", Resource: "clusterserviceversions"}: "ClusterServiceVersionList",
+		{Group: "operators.coreos.com", Version: "v1", Resource: "operatorgroups"}:               "OperatorGroupList",
 	}
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind, objects...)
 
@@ -76,7 +76,7 @@ func TestInstall_CreatesResources(t *testing.T) {
 	}
 
 	expectedPatches := map[string]bool{
-		"namespaces/test-ns":                   false,
+		"namespaces/test-ns":                    false,
 		"operatorgroups/kubectl-catalog-og":     false,
 		"catalogsources/kubectl-catalog-redhat": false,
 		"subscriptions/my-operator":             false,

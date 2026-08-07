@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	listInstalled    bool
-	showChannels     bool
-	limitChannels    int
+	listInstalled bool
+	showChannels  bool
+	limitChannels int
 )
 
 var listCmd = &cobra.Command{

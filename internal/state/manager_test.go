@@ -30,9 +30,9 @@ func makeResource(kind, name, version, channel string) unstructured.Unstructured
 
 func TestBestMetadataResource(t *testing.T) {
 	tests := []struct {
-		name      string
-		kinds     []string
-		wantKind  string
+		name     string
+		kinds    []string
+		wantKind string
 	}{
 		{
 			name:     "deployment preferred over RBAC",
