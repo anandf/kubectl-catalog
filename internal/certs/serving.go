@@ -393,7 +393,9 @@ func InjectCABundle(resources []*unstructured.Unstructured, serviceName string, 
 		}
 
 		if modified {
-			unstructured.SetNestedSlice(obj.Object, webhooks, "webhooks")
+			if err := unstructured.SetNestedSlice(obj.Object, webhooks, "webhooks"); err != nil {
+				fmt.Printf("    Warning: failed to set webhooks on %s %q: %v\n", kind, obj.GetName(), err)
+			}
 		}
 	}
 }
@@ -473,12 +475,6 @@ func GenerateServingCert(serviceName, namespace string) (certPEM, keyPEM, caPEM 
 	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
 	return certPEM, keyPEM, caPEM, nil
-}
-
-// createTLSSecret creates a TLS Secret with the given cert and key, optionally
-// stamped with a package tracking label for uninstall cleanup.
-func createTLSSecret(ctx context.Context, client dynamic.Interface, namespace, name string, certPEM, keyPEM []byte) error {
-	return createTLSSecretWithTracking(ctx, client, namespace, name, certPEM, keyPEM, "")
 }
 
 func createTLSSecretWithTracking(ctx context.Context, client dynamic.Interface, namespace, name string, certPEM, keyPEM []byte, packageName string) error {

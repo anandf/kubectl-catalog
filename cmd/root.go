@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -180,10 +181,17 @@ func applyInstallMode(manifests *bundle.Manifests, mode, targetNamespace string)
 
 	switch mode {
 	case "AllNamespaces":
-		manifests.SetWatchNamespace("")
+		err := manifests.SetWatchNamespace("")
+		if err != nil {
+			return err
+		}
 		fmt.Printf("  Install mode: AllNamespaces (operator watches all namespaces)\n")
-	case "SingleNamespace", "OwnNamespace":
-		manifests.SetWatchNamespace(targetNamespace)
+	case "SingleNamespace":
+	case "OwnNamespace":
+		err := manifests.SetWatchNamespace(targetNamespace)
+		if err != nil {
+			return err
+		}
 		fmt.Printf("  Install mode: %s (operator watches namespace %q)\n", mode, targetNamespace)
 	}
 
@@ -226,7 +234,7 @@ func applierOptions() applier.Options {
 
 // completeCatalogPackages returns package names from the catalog for shell completion.
 // It silently returns no completions if the catalog can't be loaded (e.g., missing flags).
-func completeCatalogPackages(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+func completeCatalogPackages(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
@@ -259,7 +267,7 @@ func completeCatalogPackages(cmd *cobra.Command, args []string, toComplete strin
 }
 
 // completeInstalledPackages returns installed package names for shell completion.
-func completeInstalledPackages(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+func completeInstalledPackages(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
@@ -288,20 +296,32 @@ func completeInstalledPackages(cmd *cobra.Command, args []string, toComplete str
 
 // registerStaticFlagCompletions registers completions for flags with a known set of values.
 func registerStaticFlagCompletions() {
-	rootCmd.RegisterFlagCompletionFunc("catalog-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	err := rootCmd.RegisterFlagCompletionFunc("catalog-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"redhat", "community", "certified", "operatorhub"}, cobra.ShellCompDirectiveNoFileComp
 	})
-	rootCmd.RegisterFlagCompletionFunc("cluster-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	if err != nil {
+		slog.Error(err.Error())
+	}
+	err = rootCmd.RegisterFlagCompletionFunc("cluster-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"k8s", "ocp", "okd"}, cobra.ShellCompDirectiveNoFileComp
 	})
-	rootCmd.RegisterFlagCompletionFunc("installation-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	if err != nil {
+		slog.Error(err.Error())
+	}
+	err = rootCmd.RegisterFlagCompletionFunc("installation-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"direct", "olm"}, cobra.ShellCompDirectiveNoFileComp
 	})
+	if err != nil {
+		slog.Error(err.Error())
+	}
 
 	for _, cmd := range []*cobra.Command{installCmd, upgradeCmd, generateCmd} {
-		cmd.RegisterFlagCompletionFunc("install-mode", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		err = cmd.RegisterFlagCompletionFunc("install-mode", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 			return []string{"AllNamespaces", "SingleNamespace", "OwnNamespace"}, cobra.ShellCompDirectiveNoFileComp
 		})
+		if err != nil {
+			slog.Error(err.Error())
+		}
 	}
 }
 
@@ -316,7 +336,7 @@ func withHint(err error, hint string) error {
 
 func Execute() error {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return err
 	}
 	return nil

@@ -258,14 +258,20 @@ the catalog reference stored in the installed resource annotations is used.`,
 			if err != nil {
 				return err
 			}
-			manifests.SetEnvVars(envVars)
+			err = manifests.SetEnvVars(envVars)
+			if err != nil {
+				return err
+			}
 			fmt.Printf("  Injected %d environment variable(s) into operator containers\n", len(envVars))
 		}
 
 		// Inject imagePullSecrets into Deployment pod templates BEFORE
 		// applying so pods have credentials from the moment they start.
 		if pullSecretPath != "" {
-			manifests.SetImagePullSecrets(applier.PullSecretName(packageName))
+			err = manifests.SetImagePullSecrets(applier.PullSecretName(packageName))
+			if err != nil {
+				return err
+			}
 		}
 
 		ic := &applier.InstallContext{
@@ -285,7 +291,11 @@ the catalog reference stored in the installed resource annotations is used.`,
 				return fmt.Errorf("failed to provision serving certificates: %w", err)
 			}
 			webhookSecretName := bundle.WebhookCertSecretName
-			if manifests.InjectWebhookCertVolumes(webhookSecretName) {
+			injectionFlag, err := manifests.InjectWebhookCertVolumes(webhookSecretName)
+			if err != nil {
+				return err
+			}
+			if injectionFlag {
 				if err := certs.EnsureWebhookCert(ctx, kubeconfig, targetNamespace, webhookSecretName, target.Package, manifests.Services, manifests.Other); err != nil {
 					return fmt.Errorf("failed to provision webhook certificate: %w", err)
 				}

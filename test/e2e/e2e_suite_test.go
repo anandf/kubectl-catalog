@@ -112,20 +112,20 @@ var _ = SynchronizedAfterSuite(func() {}, func() {
 
 	By("Cleaning up")
 	if binaryPath != "" {
-		os.Remove(binaryPath)
+		_ = os.Remove(binaryPath)
 	}
 	if kubeconfig != "" {
-		os.Remove(kubeconfig)
+		_ = os.Remove(kubeconfig)
 	}
 	if cacheDir != "" {
-		os.RemoveAll(cacheDir)
+		_ = os.RemoveAll(cacheDir)
 	}
 })
 
 // createKindCluster creates a kind cluster for e2e testing.
 func createKindCluster() {
 	// Delete any existing cluster with the same name
-	exec.Command("kind", "delete", "cluster", "--name", kindClusterName).Run()
+	_ = exec.Command("kind", "delete", "cluster", "--name", kindClusterName).Run()
 
 	cmd := exec.Command("kind", "create", "cluster", "--name", kindClusterName, "--wait", "120s")
 	output, err := cmd.CombinedOutput()
@@ -142,7 +142,7 @@ func deleteKindCluster() {
 // startLocalRegistry starts a local Docker registry for OCI generate tests.
 func startLocalRegistry() {
 	// Stop any existing registry
-	exec.Command("docker", "rm", "-f", registryName).Run()
+	_ = exec.Command("docker", "rm", "-f", registryName).Run()
 
 	cmd := exec.Command("docker", "run", "-d",
 		"--name", registryName,
@@ -163,7 +163,7 @@ func startLocalRegistry() {
 
 // stopLocalRegistry removes the local Docker registry.
 func stopLocalRegistry() {
-	exec.Command("docker", "rm", "-f", registryName).Run()
+	_ = exec.Command("docker", "rm", "-f", registryName).Run()
 }
 
 // runBinary executes the kubectl-catalog binary with the given args and returns

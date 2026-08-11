@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/anandf/kubectl-catalog/internal/bundle"
+	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -301,7 +302,8 @@ func TestSetSubjectNamespaces(t *testing.T) {
 		},
 	}
 
-	setSubjectNamespaces(crb, "target-ns")
+	err := setSubjectNamespaces(crb, "target-ns")
+	require.NoError(t, err)
 
 	subjects, _, _ := unstructured.NestedSlice(crb.Object, "subjects")
 	// First subject should get namespace set
@@ -326,7 +328,9 @@ func TestSetSubjectNamespaces_NonBinding(t *testing.T) {
 		},
 	}
 
-	setSubjectNamespaces(dep, "target-ns")
+	err := setSubjectNamespaces(dep, "target-ns")
+	require.NoError(t, err)
+	
 	// No panic, no changes
 	if dep.GetKind() != "Deployment" {
 		t.Error("unexpected kind change")
@@ -722,7 +726,8 @@ func TestResourceDiffers(t *testing.T) {
 	t.Run("different spec", func(t *testing.T) {
 		a := makeDeployment("my-op", "img:v1", "1.0.0")
 		b := makeDeployment("my-op", "img:v1", "1.0.0")
-		unstructured.SetNestedField(b.Object, int64(3), "spec", "replicas")
+		err := unstructured.SetNestedField(b.Object, int64(3), "spec", "replicas")
+		require.NoError(t, err, "error when trying to set replica count to 3")
 		if !resourceDiffers(a, b) {
 			t.Error("different spec should differ")
 		}

@@ -211,9 +211,12 @@ func (a *Applier) Apply(ctx context.Context, manifests *bundle.Manifests, ic *In
 	if len(manifests.RBAC) > 0 {
 		fmt.Printf("  Applying %d RBAC resource(s)...\n", len(manifests.RBAC))
 		for _, obj := range manifests.RBAC {
-			a.setDefaultSubjectNamespaces(obj)
+			err := a.setDefaultSubjectNamespaces(obj)
+			if err != nil {
+				return fmt.Errorf("setting default subject namespaces: %w", err)
+			}
 			stampMetadata(obj, labels, annotations)
-			if err := a.applyObject(ctx, obj); err != nil {
+			if err = a.applyObject(ctx, obj); err != nil {
 				return fmt.Errorf("applying RBAC %s %q: %w", obj.GetKind(), obj.GetName(), err)
 			}
 		}
@@ -301,15 +304,15 @@ func (a *Applier) getMapper() meta.RESTMapper {
 // ClusterRoleBinding or RoleBinding subject that is a ServiceAccount
 // without a namespace set. This mirrors OLM behavior — operator bundles
 // often omit the namespace on subjects since OLM injects it at install time.
-func (a *Applier) setDefaultSubjectNamespaces(obj *unstructured.Unstructured) {
+func (a *Applier) setDefaultSubjectNamespaces(obj *unstructured.Unstructured) error {
 	kind := obj.GetKind()
 	if kind != "ClusterRoleBinding" && kind != "RoleBinding" {
-		return
+		return nil
 	}
 
 	subjects, found, _ := unstructured.NestedSlice(obj.Object, "subjects")
 	if !found {
-		return
+		return nil
 	}
 
 	modified := false
@@ -328,8 +331,12 @@ func (a *Applier) setDefaultSubjectNamespaces(obj *unstructured.Unstructured) {
 	}
 
 	if modified {
-		unstructured.SetNestedSlice(obj.Object, subjects, "subjects")
+		err := unstructured.SetNestedSlice(obj.Object, subjects, "subjects")
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func stampMetadata(obj *unstructured.Unstructured, labels, annotations map[string]string) {

@@ -185,14 +185,20 @@ If the operator is already installed, use --force to re-install.`,
 					if err != nil {
 						return err
 					}
-					manifests.SetEnvVars(envVars)
+					err = manifests.SetEnvVars(envVars)
+					if err != nil {
+						return err
+					}
 					fmt.Printf("  Injected %d environment variable(s) into operator containers\n", len(envVars))
 				}
 
 				// Inject imagePullSecrets into Deployment pod templates BEFORE
 				// applying so pods have credentials from the moment they start.
 				if pullSecretPath != "" {
-					manifests.SetImagePullSecrets(applier.PullSecretName(packageName))
+					err = manifests.SetImagePullSecrets(applier.PullSecretName(packageName))
+					if err != nil {
+						return err
+					}
 				}
 
 				ic := &applier.InstallContext{
@@ -215,7 +221,11 @@ If the operator is already installed, use --force to re-install.`,
 					// volume mount into the Deployment and create the TLS secret.
 					// On OpenShift, OLM handles this; on vanilla k8s we do it.
 					webhookSecretName := bundle.WebhookCertSecretName
-					if manifests.InjectWebhookCertVolumes(webhookSecretName) {
+					injectionFlag, err := manifests.InjectWebhookCertVolumes(webhookSecretName)
+					if err != nil {
+						return err
+					}
+					if injectionFlag {
 						if err := certs.EnsureWebhookCert(ctx, kubeconfig, targetNamespace, webhookSecretName, b.Package, manifests.Services, manifests.Other); err != nil {
 							return fmt.Errorf("failed to provision webhook certificate: %w", err)
 						}

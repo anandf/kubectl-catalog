@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -276,7 +277,10 @@ func TestIsCRDEstablished(t *testing.T) {
 				"metadata":   map[string]interface{}{"name": "test.example.com"},
 			}}
 			if tt.conditions != nil {
-				unstructured.SetNestedSlice(obj.Object, tt.conditions, "status", "conditions")
+				err := unstructured.SetNestedSlice(obj.Object, tt.conditions, "status", "conditions")
+				if err != nil {
+					require.NoError(t, err)
+				}
 			}
 			if got := isCRDEstablished(obj); got != tt.want {
 				t.Errorf("isCRDEstablished() = %v, want %v", got, tt.want)
@@ -404,7 +408,10 @@ func TestSetDefaultSubjectNamespaces(t *testing.T) {
 		},
 	}
 
-	a.setDefaultSubjectNamespaces(obj)
+	err := a.setDefaultSubjectNamespaces(obj)
+	if err != nil {
+		require.NoError(t, err)
+	}
 
 	subjects, _, _ := unstructured.NestedSlice(obj.Object, "subjects")
 	sa0 := subjects[0].(map[string]interface{})
@@ -435,7 +442,8 @@ func TestSetDefaultSubjectNamespacesNonBinding(t *testing.T) {
 	}
 
 	// Should be a no-op for non-binding kinds
-	a.setDefaultSubjectNamespaces(obj)
+	err := a.setDefaultSubjectNamespaces(obj)
+	require.NoError(t, err)
 }
 
 func TestEnsurePullSecret(t *testing.T) {

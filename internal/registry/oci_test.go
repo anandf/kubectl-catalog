@@ -10,9 +10,15 @@ func TestTarDirectory(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create test files
-	os.WriteFile(filepath.Join(dir, "file1.yaml"), []byte("content1"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "subdir"), 0o755)
-	os.WriteFile(filepath.Join(dir, "subdir", "file2.yaml"), []byte("content2"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "file1.yaml"), []byte("content1"), 0o644); err != nil {
+		t.Fatalf("writing file1.yaml: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatalf("creating subdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "subdir", "file2.yaml"), []byte("content2"), 0o644); err != nil {
+		t.Fatalf("writing file2.yaml: %v", err)
+	}
 
 	reader, err := tarDirectory(dir)
 	if err != nil {
@@ -59,8 +65,12 @@ func TestTarDirectory_Empty(t *testing.T) {
 func TestTarDirectory_UsesForwardSlashes(t *testing.T) {
 	dir := t.TempDir()
 
-	os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755)
-	os.WriteFile(filepath.Join(dir, "a", "b", "c.yaml"), []byte("nested"), 0o644)
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatalf("creating nested dirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a", "b", "c.yaml"), []byte("nested"), 0o644); err != nil {
+		t.Fatalf("writing nested file: %v", err)
+	}
 
 	reader, err := tarDirectory(dir)
 	if err != nil {

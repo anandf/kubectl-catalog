@@ -156,7 +156,7 @@ func (p *ImagePuller) pullAndExtract(ctx context.Context, imageRef string, destD
 // producing the equivalent of the container's root filesystem.
 func extractImage(img v1.Image, destDir string, pathPrefixes ...string) error {
 	reader := mutate.Extract(img)
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	return Untar(reader, destDir, pathPrefixes...)
 }

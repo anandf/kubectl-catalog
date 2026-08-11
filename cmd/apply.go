@@ -48,7 +48,9 @@ The source must contain a _metadata.yaml file created by the generate command.`,
 			return err
 		}
 		if cleanupDir != "" {
-			defer os.RemoveAll(cleanupDir)
+			defer func() {
+				_ = os.RemoveAll(cleanupDir)
+			}()
 		}
 
 		// Read metadata
@@ -94,7 +96,10 @@ The source must contain a _metadata.yaml file created by the generate command.`,
 			if err != nil {
 				return err
 			}
-			manifests.SetEnvVars(envVars)
+			err = manifests.SetEnvVars(envVars)
+			if err != nil {
+				return err
+			}
 			fmt.Printf("  Injected %d environment variable(s) into operator containers\n", len(envVars))
 		}
 
@@ -104,7 +109,10 @@ The source must contain a _metadata.yaml file created by the generate command.`,
 			if err := ensureClusterPullSecret(ctx, k8sApplier, meta.PackageName); err != nil {
 				return err
 			}
-			manifests.SetImagePullSecrets(applier.PullSecretName(meta.PackageName))
+			err := manifests.SetImagePullSecrets(applier.PullSecretName(meta.PackageName))
+			if err != nil {
+				return err
+			}
 		}
 
 		ic := &applier.InstallContext{
@@ -285,11 +293,17 @@ func resolveApplySource(ctx context.Context, source string) (manifestDir string,
 
 	puller, pullerErr := newImagePuller()
 	if pullerErr != nil {
-		os.RemoveAll(tmpDir)
+		err = os.RemoveAll(tmpDir)
+		if err != nil {
+			return "", "", err
+		}
 		return "", "", pullerErr
 	}
-	if err := puller.PullArtifact(ctx, ociRef, tmpDir); err != nil {
-		os.RemoveAll(tmpDir)
+	if err = puller.PullArtifact(ctx, ociRef, tmpDir); err != nil {
+		err = os.RemoveAll(tmpDir)
+		if err != nil {
+			return "", "", err
+		}
 		return "", "", fmt.Errorf("failed to pull OCI artifact: %w", err)
 	}
 

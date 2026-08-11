@@ -101,9 +101,9 @@ func TestUntar_ZipSlipProtection(t *testing.T) {
 		Mode: 0o644,
 		Size: 4,
 	}
-	tw.WriteHeader(header)
-	tw.Write([]byte("evil"))
-	tw.Close()
+	_ = tw.WriteHeader(header)
+	_, _ = tw.Write([]byte("evil"))
+	_ = tw.Close()
 
 	destDir := t.TempDir()
 	err := Untar(&buf, destDir)
@@ -121,8 +121,8 @@ func TestUntar_AbsoluteSymlinkRejected(t *testing.T) {
 		Name:     "manifests/evil-link",
 		Linkname: "/etc/passwd",
 	}
-	tw.WriteHeader(header)
-	tw.Close()
+	_ = tw.WriteHeader(header)
+	_ = tw.Close()
 
 	destDir := t.TempDir()
 	err := Untar(&buf, destDir, "manifests")
@@ -143,8 +143,8 @@ func TestUntar_RelativeSymlinkEscapeRejected(t *testing.T) {
 		Name:     "manifests/escape-link",
 		Linkname: "../../etc/passwd",
 	}
-	tw.WriteHeader(header)
-	tw.Close()
+	_ = tw.WriteHeader(header)
+	_ = tw.Close()
 
 	destDir := t.TempDir()
 	err := Untar(&buf, destDir, "manifests")
@@ -168,8 +168,8 @@ func TestUntar_OversizedFileRejected(t *testing.T) {
 	}
 	// Write just enough to satisfy tar (we don't need to write the full size)
 	data := make([]byte, 1024)
-	tw.Write(data)
-	tw.Close()
+	_, _ = tw.Write(data)
+	_ = tw.Close()
 
 	destDir := t.TempDir()
 	err := Untar(&buf, destDir)
@@ -181,7 +181,7 @@ func TestUntar_OversizedFileRejected(t *testing.T) {
 func TestUntar_EmptyArchive(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	tw.Close()
+	_ = tw.Close()
 
 	destDir := t.TempDir()
 	err := Untar(&buf, destDir)

@@ -151,7 +151,7 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		AfterEach(func() {
-			os.RemoveAll(outputDir)
+			_ = os.RemoveAll(outputDir)
 		})
 
 		It("should generate manifests for an operator", func() {
@@ -232,7 +232,7 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		AfterEach(func() {
-			os.RemoveAll(outputDir)
+			_ = os.RemoveAll(outputDir)
 		})
 
 		It("should push generated manifests to a local OCI registry", func() {
@@ -280,8 +280,8 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		AfterEach(func() {
-			runBinary("uninstall", testOperator)
-			os.RemoveAll(outputDir)
+			_, _, _ = runBinary("uninstall", testOperator)
+			_ = os.RemoveAll(outputDir)
 		})
 
 		It("should apply generated manifests to the cluster", func() {
@@ -305,7 +305,7 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		It("should fail for directory without _metadata.yaml", func() {
 			emptyDir, err := os.MkdirTemp("", "empty-*")
 			Expect(err).NotTo(HaveOccurred())
-			defer os.RemoveAll(emptyDir)
+			defer func() { _ = os.RemoveAll(emptyDir) }()
 
 			_, _, err = runBinary("apply", emptyDir)
 			Expect(err).To(HaveOccurred())
@@ -314,7 +314,7 @@ var _ = Describe("kubectl-catalog E2E", func() {
 
 	Describe("install and uninstall", func() {
 		AfterEach(func() {
-			runBinary("uninstall", testOperator)
+			_, _, _ = runBinary("uninstall", testOperator)
 		})
 
 		It("should install an operator and then uninstall it", func() {
@@ -368,7 +368,7 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		AfterEach(func() {
-			runBinary("uninstall", testOperator)
+			_, _, _ = runBinary("uninstall", testOperator)
 		})
 
 		It("should show status of an installed operator", func() {
@@ -401,7 +401,7 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		AfterEach(func() {
-			runBinary("uninstall", testOperator)
+			_, _, _ = runBinary("uninstall", testOperator)
 		})
 
 		It("should upgrade or report already at latest", func() {

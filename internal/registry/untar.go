@@ -68,7 +68,7 @@ func Untar(r io.Reader, destDir string, pathPrefixes ...string) error {
 				return fmt.Errorf("creating file %s: %w", target, err)
 			}
 			written, copyErr := io.Copy(f, io.LimitReader(tr, maxFileSize+1))
-			f.Close()
+			_ = f.Close()
 			if copyErr != nil {
 				return fmt.Errorf("writing file %s: %w", target, copyErr)
 			}

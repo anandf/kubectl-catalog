@@ -157,7 +157,7 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("creating temp directory: %w", err)
 			}
-			defer os.RemoveAll(tmpDir)
+			defer func() { _ = os.RemoveAll(tmpDir) }()
 			outputDir = tmpDir
 		} else if outputDir == "" {
 			safePkg := filepath.Base(packageName)
@@ -198,7 +198,10 @@ Examples:
 				if err != nil {
 					return err
 				}
-				manifests.SetEnvVars(envVars)
+				err = manifests.SetEnvVars(envVars)
+				if err != nil {
+					return err
+				}
 				fmt.Printf("  Injected %d environment variable(s) into operator containers\n", len(envVars))
 			}
 
@@ -212,7 +215,10 @@ Examples:
 					obj.SetNamespace(targetNamespace)
 				}
 				// Fill in namespace on binding subjects
-				setSubjectNamespaces(obj, targetNamespace)
+				err := setSubjectNamespaces(obj, targetNamespace)
+				if err != nil {
+					return err
+				}
 			}
 
 			// For multi-bundle plans, put each bundle in a subdirectory
@@ -618,15 +624,15 @@ func isNamespacedKind(kind string) bool {
 }
 
 // setSubjectNamespaces fills in namespace on ServiceAccount subjects in bindings.
-func setSubjectNamespaces(obj *unstructured.Unstructured, ns string) {
+func setSubjectNamespaces(obj *unstructured.Unstructured, ns string) error {
 	kind := obj.GetKind()
 	if kind != "ClusterRoleBinding" && kind != "RoleBinding" {
-		return
+		return nil
 	}
 
 	subjects, found, _ := unstructured.NestedSlice(obj.Object, "subjects")
 	if !found {
-		return
+		return nil
 	}
 
 	modified := false
@@ -645,8 +651,12 @@ func setSubjectNamespaces(obj *unstructured.Unstructured, ns string) {
 	}
 
 	if modified {
-		unstructured.SetNestedSlice(obj.Object, subjects, "subjects")
+		err := unstructured.SetNestedSlice(obj.Object, subjects, "subjects")
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func init() {

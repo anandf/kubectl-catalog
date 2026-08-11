@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -120,7 +121,10 @@ func TestSetWatchNamespace(t *testing.T) {
 	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
 
 	// Set to a specific namespace
-	m.SetWatchNamespace("my-namespace")
+	err := m.SetWatchNamespace("my-namespace")
+	if err != nil {
+		require.NoError(t, err)
+	}
 	env := getContainerEnv(t, m.Deployments[0], 0)
 
 	// Should have FOO and WATCH_NAMESPACE (old one removed, new one added)
@@ -139,7 +143,10 @@ func TestSetWatchNamespace(t *testing.T) {
 	}
 
 	// Set to empty (AllNamespaces)
-	m.SetWatchNamespace("")
+	err = m.SetWatchNamespace("")
+	if err != nil {
+		require.NoError(t, err)
+	}
 	env = getContainerEnv(t, m.Deployments[0], 0)
 	for _, e := range env {
 		eMap := e.(map[string]interface{})
@@ -160,8 +167,10 @@ func TestSetWatchNamespace_NoExistingEnv(t *testing.T) {
 	})
 
 	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
-	m.SetWatchNamespace("test-ns")
-
+	err := m.SetWatchNamespace("test-ns")
+	if err != nil {
+		require.NoError(t, err)
+	}
 	env := getContainerEnv(t, m.Deployments[0], 0)
 	if len(env) != 1 {
 		t.Fatalf("env length = %d, want 1", len(env))
@@ -203,8 +212,11 @@ spec:
       - name: operator
         image: quay.io/my-operator:v1`
 
-	os.WriteFile(filepath.Join(manifestDir, "crd.yaml"), []byte(crdYAML), 0o644)
-	os.WriteFile(filepath.Join(manifestDir, "deployment.yaml"), []byte(deployYAML), 0o644)
+	err := os.WriteFile(filepath.Join(manifestDir, "crd.yaml"), []byte(crdYAML), 0o644)
+	require.NoError(t, err)
+
+	err = os.WriteFile(filepath.Join(manifestDir, "deployment.yaml"), []byte(deployYAML), 0o644)
+	require.NoError(t, err)
 
 	manifests, err := Extract(bundleDir)
 	if err != nil {
@@ -250,7 +262,8 @@ spec:
       - name: operator
         image: quay.io/my-operator:v1`
 
-	os.WriteFile(filepath.Join(manifestDir, "combined.yaml"), []byte(multiDoc), 0o644)
+	err := os.WriteFile(filepath.Join(manifestDir, "combined.yaml"), []byte(multiDoc), 0o644)
+	require.NoError(t, err)
 
 	manifests, err := Extract(bundleDir)
 	if err != nil {
@@ -294,7 +307,8 @@ data:
   key: value
 `
 
-	os.WriteFile(filepath.Join(manifestDir, "multi.yaml"), []byte(multiDoc), 0o644)
+	err := os.WriteFile(filepath.Join(manifestDir, "multi.yaml"), []byte(multiDoc), 0o644)
+	require.NoError(t, err)
 
 	manifests, err := Extract(bundleDir)
 	if err != nil {
@@ -342,7 +356,8 @@ kind: ServiceAccount
 metadata:
   name: my-sa`
 
-	os.WriteFile(filepath.Join(bundleDir, "sa.yaml"), []byte(saYAML), 0o644)
+	err := os.WriteFile(filepath.Join(bundleDir, "sa.yaml"), []byte(saYAML), 0o644)
+	require.NoError(t, err)
 
 	manifests, err := Extract(bundleDir)
 	if err != nil {
@@ -367,11 +382,11 @@ func TestSetEnvVars(t *testing.T) {
 	})
 
 	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
-	m.SetEnvVars(map[string]string{
+	err := m.SetEnvVars(map[string]string{
 		"REPLACE_ME": "new",
 		"NEW_VAR":    "hello",
 	})
-
+	require.NoError(t, err)
 	env := getContainerEnv(t, m.Deployments[0], 0)
 
 	envMap := make(map[string]string)
@@ -398,8 +413,11 @@ func TestSetEnvVars_Empty(t *testing.T) {
 	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
 
 	// Should be a no-op
-	m.SetEnvVars(nil)
-	m.SetEnvVars(map[string]string{})
+	err := m.SetEnvVars(nil)
+	require.NoError(t, err)
+
+	err = m.SetEnvVars(map[string]string{})
+	require.NoError(t, err)
 
 	env := getContainerEnv(t, m.Deployments[0], 0)
 	if len(env) != 0 {
@@ -419,7 +437,8 @@ func TestSetEnvVars_NoContainers(t *testing.T) {
 	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
 
 	// Should not panic
-	m.SetEnvVars(map[string]string{"FOO": "bar"})
+	err := m.SetEnvVars(map[string]string{"FOO": "bar"})
+	require.NoError(t, err)
 }
 
 func TestSetImagePullSecrets(t *testing.T) {
@@ -428,7 +447,8 @@ func TestSetImagePullSecrets(t *testing.T) {
 	})
 	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
 
-	m.SetImagePullSecrets("my-pull-secret")
+	err := m.SetImagePullSecrets("my-pull-secret")
+	require.NoError(t, err)
 
 	pullSecrets, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "imagePullSecrets")
 	if len(pullSecrets) != 1 {
@@ -447,8 +467,10 @@ func TestSetImagePullSecrets_NoDuplicate(t *testing.T) {
 	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
 
 	// Call twice with the same secret name
-	m.SetImagePullSecrets("my-pull-secret")
-	m.SetImagePullSecrets("my-pull-secret")
+	err := m.SetImagePullSecrets("my-pull-secret")
+	require.NoError(t, err)
+	err = m.SetImagePullSecrets("my-pull-secret")
+	require.NoError(t, err)
 
 	pullSecrets, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "imagePullSecrets")
 	if len(pullSecrets) != 1 {
@@ -465,7 +487,9 @@ func TestSetImagePullSecrets_MultipleDeployments(t *testing.T) {
 	})
 	m := &Manifests{Deployments: []*unstructured.Unstructured{dep1, dep2}}
 
-	m.SetImagePullSecrets("secret")
+	if err := m.SetImagePullSecrets("secret"); err != nil {
+		t.Fatalf("SetImagePullSecrets() error: %v", err)
+	}
 
 	for i, dep := range m.Deployments {
 		pullSecrets, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "imagePullSecrets")
@@ -499,7 +523,8 @@ func TestInjectWebhookCertVolumes(t *testing.T) {
 		Other:       []*unstructured.Unstructured{webhook},
 	}
 
-	injected := m.InjectWebhookCertVolumes("webhook-server-cert")
+	injected, err := m.InjectWebhookCertVolumes("webhook-server-cert")
+	require.NoError(t, err)
 	if !injected {
 		t.Fatal("InjectWebhookCertVolumes returned false, expected true")
 	}
@@ -536,7 +561,8 @@ func TestInjectWebhookCertVolumes_NoWebhooks(t *testing.T) {
 		Deployments: []*unstructured.Unstructured{dep},
 	}
 
-	injected := m.InjectWebhookCertVolumes("webhook-server-cert")
+	injected, err := m.InjectWebhookCertVolumes("webhook-server-cert")
+	require.NoError(t, err)
 	if injected {
 		t.Error("InjectWebhookCertVolumes returned true for deployment without webhook signals")
 	}
@@ -572,7 +598,8 @@ func TestInjectWebhookCertVolumes_AlreadyMounted(t *testing.T) {
 		Other:       []*unstructured.Unstructured{webhook},
 	}
 
-	injected := m.InjectWebhookCertVolumes("webhook-server-cert")
+	injected, err := m.InjectWebhookCertVolumes("webhook-server-cert")
+	require.NoError(t, err)
 	if injected {
 		t.Error("InjectWebhookCertVolumes should skip deployments that already have the mount")
 	}
@@ -580,7 +607,8 @@ func TestInjectWebhookCertVolumes_AlreadyMounted(t *testing.T) {
 
 func TestInjectWebhookCertVolumes_NoDeployments(t *testing.T) {
 	m := &Manifests{}
-	injected := m.InjectWebhookCertVolumes("webhook-server-cert")
+	injected, err := m.InjectWebhookCertVolumes("webhook-server-cert")
+	require.NoError(t, err)
 	if injected {
 		t.Error("InjectWebhookCertVolumes returned true with no deployments")
 	}
@@ -649,7 +677,8 @@ func TestPatchCRDsForConversionWebhooks(t *testing.T) {
 		},
 	}
 
-	patchCRDsForConversionWebhooks(m)
+	err := patchCRDsForConversionWebhooks(m)
+	require.NoError(t, err)
 
 	strategy, found, _ := unstructured.NestedString(crd.Object, "spec", "conversion", "strategy")
 	if !found || strategy != "Webhook" {
@@ -712,7 +741,8 @@ func TestPatchCRDsForConversionWebhooks_SkipsExisting(t *testing.T) {
 		},
 	}
 
-	patchCRDsForConversionWebhooks(m)
+	err := patchCRDsForConversionWebhooks(m)
+	require.NoError(t, err)
 
 	// Should NOT have been patched — existing config preserved
 	svcName, _, _ := unstructured.NestedString(crd.Object, "spec", "conversion", "webhook", "clientConfig", "service", "name")
@@ -741,7 +771,8 @@ func TestPatchCRDsForConversionWebhooks_NoMatch(t *testing.T) {
 		},
 	}
 
-	patchCRDsForConversionWebhooks(m)
+	err := patchCRDsForConversionWebhooks(m)
+	require.NoError(t, err)
 
 	// Should not have conversion set
 	_, found, _ := unstructured.NestedMap(crd.Object, "spec", "conversion")
@@ -810,8 +841,10 @@ spec:
     served: true
     storage: false`
 
-	os.WriteFile(filepath.Join(manifestDir, "csv.yaml"), []byte(csvYAML), 0o644)
-	os.WriteFile(filepath.Join(manifestDir, "crd.yaml"), []byte(crdYAML), 0o644)
+	err := os.WriteFile(filepath.Join(manifestDir, "csv.yaml"), []byte(csvYAML), 0o644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(manifestDir, "crd.yaml"), []byte(crdYAML), 0o644)
+	require.NoError(t, err)
 
 	manifests, err := Extract(bundleDir)
 	if err != nil {

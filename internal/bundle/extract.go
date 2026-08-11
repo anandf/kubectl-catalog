@@ -15,7 +15,6 @@ import (
 const (
 	// Standard OLM bundle directories
 	manifestsDir = "manifests"
-	metadataDir  = "metadata"
 )
 
 // InstallMode represents a supported OLM install mode.
@@ -177,7 +176,10 @@ func Extract(bundleDir string) (*Manifests, error) {
 	}
 
 	// Patch CRDs with conversion webhook configuration from CSV webhookdefinitions
-	patchCRDsForConversionWebhooks(manifests)
+	err = patchCRDsForConversionWebhooks(manifests)
+	if err != nil {
+		return nil, fmt.Errorf("patching CRDs for conversion webhooks: %w", err)
+	}
 
 	return manifests, nil
 }
@@ -185,9 +187,9 @@ func Extract(bundleDir string) (*Manifests, error) {
 // patchCRDsForConversionWebhooks sets spec.conversion on CRDs that are
 // referenced by ConversionWebhook entries in the CSV's webhookdefinitions.
 // CRDs that already have spec.conversion.webhook configured are left untouched.
-func patchCRDsForConversionWebhooks(m *Manifests) {
+func patchCRDsForConversionWebhooks(m *Manifests) error {
 	if len(m.ConversionWebhooks) == 0 {
-		return
+		return nil
 	}
 
 	// Index conversion webhooks by CRD name
@@ -229,8 +231,12 @@ func patchCRDsForConversionWebhooks(m *Manifests) {
 				"conversionReviewVersions": reviewVersions,
 			},
 		}
-		unstructured.SetNestedField(crd.Object, conversion, "spec", "conversion")
+		err := unstructured.SetNestedField(crd.Object, conversion, "spec", "conversion")
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // splitYAMLDocuments splits raw YAML data on "---" document separators.
@@ -267,7 +273,7 @@ func splitYAMLDocuments(data []byte) [][]byte {
 // SetWatchNamespace injects the WATCH_NAMESPACE environment variable into all
 // containers of all Deployments. For AllNamespaces mode, the value is "" (empty).
 // For SingleNamespace/OwnNamespace mode, the value is the target namespace.
-func (m *Manifests) SetWatchNamespace(watchNS string) {
+func (m *Manifests) SetWatchNamespace(watchNS string) error {
 	for _, dep := range m.Deployments {
 		containers, found, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
 		if !found {
@@ -299,16 +305,20 @@ func (m *Manifests) SetWatchNamespace(watchNS string) {
 			container["env"] = filtered
 			containers[i] = container
 		}
-		unstructured.SetNestedSlice(dep.Object, containers, "spec", "template", "spec", "containers")
+		err := unstructured.SetNestedSlice(dep.Object, containers, "spec", "template", "spec", "containers")
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // SetEnvVars injects the given environment variables into all containers of all
 // Deployments. If a variable with the same name already exists, its value is
 // replaced. This mirrors the OLM Subscription spec.config.env behaviour.
-func (m *Manifests) SetEnvVars(envVars map[string]string) {
+func (m *Manifests) SetEnvVars(envVars map[string]string) error {
 	if len(envVars) == 0 {
-		return
+		return nil
 	}
 	for _, dep := range m.Deployments {
 		containers, found, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
@@ -345,14 +355,18 @@ func (m *Manifests) SetEnvVars(envVars map[string]string) {
 			container["env"] = env
 			containers[i] = container
 		}
-		unstructured.SetNestedSlice(dep.Object, containers, "spec", "template", "spec", "containers")
+		err := unstructured.SetNestedSlice(dep.Object, containers, "spec", "template", "spec", "containers")
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // SetImagePullSecrets injects an imagePullSecrets entry into the pod template
 // spec of all Deployments. This ensures pods have registry credentials from
 // the moment they are created, avoiding ImagePullBackOff race conditions.
-func (m *Manifests) SetImagePullSecrets(secretName string) {
+func (m *Manifests) SetImagePullSecrets(secretName string) error {
 	for _, dep := range m.Deployments {
 		pullSecrets, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "imagePullSecrets")
 
@@ -371,9 +385,13 @@ func (m *Manifests) SetImagePullSecrets(secretName string) {
 			pullSecrets = append(pullSecrets, map[string]interface{}{
 				"name": secretName,
 			})
-			unstructured.SetNestedSlice(dep.Object, pullSecrets, "spec", "template", "spec", "imagePullSecrets")
+			err := unstructured.SetNestedSlice(dep.Object, pullSecrets, "spec", "template", "spec", "imagePullSecrets")
+			if err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // WebhookCertSecretName is the conventional name for the webhook serving cert
@@ -394,9 +412,9 @@ const WebhookCertMountPath = "/tmp/k8s-webhook-server/serving-certs"
 //  2. Container ports matching controller-runtime's default webhook port (9443)
 //  3. Container args/command containing "webhook" keywords
 //  4. Environment variables referencing webhook or cert paths
-func (m *Manifests) InjectWebhookCertVolumes(secretName string) bool {
+func (m *Manifests) InjectWebhookCertVolumes(secretName string) (bool, error) {
 	if len(m.Deployments) == 0 {
-		return false
+		return false, nil
 	}
 
 	// Check for explicit webhook configurations in the bundle
@@ -432,7 +450,10 @@ func (m *Manifests) InjectWebhookCertVolumes(secretName string) bool {
 				"defaultMode": int64(420), // 0644
 			},
 		})
-		unstructured.SetNestedSlice(dep.Object, volumes, "spec", "template", "spec", "volumes")
+		err := unstructured.SetNestedSlice(dep.Object, volumes, "spec", "template", "spec", "volumes")
+		if err != nil {
+			return false, err
+		}
 
 		// Add the volume mount to the manager container
 		containers, found, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
@@ -467,11 +488,14 @@ func (m *Manifests) InjectWebhookCertVolumes(secretName string) bool {
 		})
 		container["volumeMounts"] = mounts
 		containers[managerIdx] = container
-		unstructured.SetNestedSlice(dep.Object, containers, "spec", "template", "spec", "containers")
+		err = unstructured.SetNestedSlice(dep.Object, containers, "spec", "template", "spec", "containers")
+		if err != nil {
+			return false, err
+		}
 		injected = true
 	}
 
-	return injected
+	return injected, nil
 }
 
 // deploymentUsesWebhooks inspects a Deployment for signs that it runs a webhook server:
@@ -586,16 +610,18 @@ func hasVolumeMount(dep *unstructured.Unstructured, mountPath string) bool {
 
 func classifyAndAdd(m *Manifests, obj *unstructured.Unstructured) {
 	gvk := obj.GroupVersionKind()
-	switch {
-	case gvk.Kind == "CustomResourceDefinition":
+	switch gvk.Kind {
+	case "CustomResourceDefinition":
 		m.CRDs = append(m.CRDs, obj)
-	case gvk.Kind == "ClusterRole" || gvk.Kind == "ClusterRoleBinding" ||
-		gvk.Kind == "Role" || gvk.Kind == "RoleBinding" ||
-		gvk.Kind == "ServiceAccount":
+	case "ClusterRole":
+	case "ClusterRoleBinding":
+	case "Role":
+	case "RoleBinding":
+	case "ServiceAccount":
 		m.RBAC = append(m.RBAC, obj)
-	case gvk.Kind == "Deployment":
+	case "Deployment":
 		m.Deployments = append(m.Deployments, obj)
-	case gvk.Kind == "Service":
+	case "Service":
 		m.Services = append(m.Services, obj)
 	default:
 		m.Other = append(m.Other, obj)

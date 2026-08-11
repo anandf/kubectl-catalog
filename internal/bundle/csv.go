@@ -475,12 +475,11 @@ func buildAdmissionWebhookConfig(wdMap map[string]interface{}, serviceName strin
 		}
 	}
 
-	servicePort := int32(port)
 	webhook := admissionregistrationv1.WebhookClientConfig{
 		Service: &admissionregistrationv1.ServiceReference{
 			Name: serviceName,
 			Path: &webhookPath,
-			Port: &servicePort,
+			Port: &port,
 		},
 	}
 

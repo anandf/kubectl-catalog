@@ -74,7 +74,7 @@ func parseJSONFile(path string, fbc *FBC) error {
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	decoder := json.NewDecoder(f)
 	for decoder.More() {
@@ -94,7 +94,7 @@ func parseYAMLFile(path string, fbc *FBC) error {
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	decoder := goyaml.NewDecoder(f)
 	for {
