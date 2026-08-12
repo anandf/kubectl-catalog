@@ -33,15 +33,16 @@ var (
 // generateMetadata holds the install context written alongside generated manifests.
 // It is read back by the apply command to stamp tracking labels/annotations.
 type generateMetadata struct {
-	PackageName string `json:"packageName"`
-	Version     string `json:"version"`
-	Channel     string `json:"channel"`
-	BundleName  string `json:"bundleName"`
-	BundleImage string `json:"bundleImage"`
-	CatalogRef  string `json:"catalogRef"`
-	Namespace   string `json:"namespace"`
-	ClusterType string `json:"clusterType"`
-	InstallMode string `json:"installMode"`
+	PackageName  string `json:"packageName"`
+	Version      string `json:"version"`
+	Channel      string `json:"channel"`
+	BundleName   string `json:"bundleName"`
+	BundleImage  string `json:"bundleImage"`
+	CatalogRef   string `json:"catalogRef"`
+	Namespace    string `json:"namespace"`
+	ClusterType  string `json:"clusterType"`
+	InstallMode  string `json:"installMode"`
+	CertProvider string `json:"certProvider,omitempty"`
 }
 
 var generateCmd = &cobra.Command{
@@ -232,23 +233,24 @@ Examples:
 				return fmt.Errorf("failed to write manifests for %q: %w", b.Name, err)
 			}
 
-			// Generate serving cert secrets for vanilla k8s
+			// Generate cert resources for vanilla k8s
 			if isVanillaK8s() {
-				if err := generateServingCertSecrets(bundleOutputDir, targetNamespace, manifests); err != nil {
-					return fmt.Errorf("failed to generate serving cert secrets: %w", err)
+				if err := generateCertResources(bundleOutputDir, targetNamespace, b.Package, manifests); err != nil {
+					return fmt.Errorf("failed to generate cert resources: %w", err)
 				}
 			}
 
 			lastMeta = &generateMetadata{
-				PackageName: b.Package,
-				Version:     b.Version,
-				Channel:     b.Channel,
-				BundleName:  b.Name,
-				BundleImage: b.Image,
-				CatalogRef:  catalogImage,
-				Namespace:   targetNamespace,
-				ClusterType: clusterType,
-				InstallMode: mode,
+				PackageName:  b.Package,
+				Version:      b.Version,
+				Channel:      b.Channel,
+				BundleName:   b.Name,
+				BundleImage:  b.Image,
+				CatalogRef:   catalogImage,
+				Namespace:    targetNamespace,
+				ClusterType:  clusterType,
+				InstallMode:  mode,
+				CertProvider: certProvider,
 			}
 
 			if !isOCI {
@@ -456,15 +458,16 @@ func writeManifests(outputDir string, manifests *bundle.Manifests, targetNamespa
 
 	// Write metadata
 	meta := generateMetadata{
-		PackageName: b.Package,
-		Version:     b.Version,
-		Channel:     b.Channel,
-		BundleName:  b.Name,
-		BundleImage: b.Image,
-		CatalogRef:  catalogImage,
-		Namespace:   targetNamespace,
-		ClusterType: clusterType,
-		InstallMode: installMode,
+		PackageName:  b.Package,
+		Version:      b.Version,
+		Channel:      b.Channel,
+		BundleName:   b.Name,
+		BundleImage:  b.Image,
+		CatalogRef:   catalogImage,
+		Namespace:    targetNamespace,
+		ClusterType:  clusterType,
+		InstallMode:  installMode,
+		CertProvider: certProvider,
 	}
 	metaJSON, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {

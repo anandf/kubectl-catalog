@@ -10,7 +10,6 @@ import (
 	"github.com/anandf/kubectl-catalog/internal/applier"
 	"github.com/anandf/kubectl-catalog/internal/bundle"
 	"github.com/anandf/kubectl-catalog/internal/catalog"
-	"github.com/anandf/kubectl-catalog/internal/certs"
 	"github.com/anandf/kubectl-catalog/internal/resolver"
 	"github.com/anandf/kubectl-catalog/internal/state"
 	"github.com/spf13/cobra"
@@ -45,6 +44,9 @@ the catalog reference stored in the installed resource annotations is used.`,
 		defer cancel()
 
 		if err := validateInstallationType(); err != nil {
+			return err
+		}
+		if err := validateCertProvider(); err != nil {
 			return err
 		}
 
@@ -283,22 +285,11 @@ the catalog reference stored in the installed resource annotations is used.`,
 			CatalogRef:  catalogRef,
 		}
 
-		// On vanilla k8s, generate self-signed serving certs for services
-		// that have the OpenShift serving-cert annotation, and inject
-		// webhook cert volumes into Deployments.
+		// On vanilla k8s, provision TLS certs for services and webhooks.
+		// On OpenShift, OLM and the service-ca-operator handle this.
 		if isVanillaK8s() {
-			if err := certs.EnsureServingCerts(ctx, kubeconfig, targetNamespace, target.Package, manifests.Services, manifests.Deployments, manifests.Other); err != nil {
-				return fmt.Errorf("failed to provision serving certificates: %w", err)
-			}
-			webhookSecretName := bundle.WebhookCertSecretName
-			injectionFlag, err := manifests.InjectWebhookCertVolumes(webhookSecretName)
-			if err != nil {
+			if err := provisionCerts(ctx, kubeconfig, targetNamespace, target.Package, manifests); err != nil {
 				return err
-			}
-			if injectionFlag {
-				if err := certs.EnsureWebhookCert(ctx, kubeconfig, targetNamespace, webhookSecretName, target.Package, manifests.Services, manifests.Other); err != nil {
-					return fmt.Errorf("failed to provision webhook certificate: %w", err)
-				}
 			}
 		}
 

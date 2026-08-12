@@ -8,7 +8,6 @@ import (
 	"github.com/anandf/kubectl-catalog/internal/applier"
 	"github.com/anandf/kubectl-catalog/internal/bundle"
 	"github.com/anandf/kubectl-catalog/internal/catalog"
-	"github.com/anandf/kubectl-catalog/internal/certs"
 	"github.com/anandf/kubectl-catalog/internal/registry"
 	"github.com/anandf/kubectl-catalog/internal/resolver"
 	"github.com/anandf/kubectl-catalog/internal/state"
@@ -42,6 +41,9 @@ If the operator is already installed, use --force to re-install.`,
 		defer cancel()
 
 		if err := validateInstallationType(); err != nil {
+			return err
+		}
+		if err := validateCertProvider(); err != nil {
 			return err
 		}
 
@@ -210,25 +212,11 @@ If the operator is already installed, use --force to re-install.`,
 					CatalogRef:  catalogImage,
 				}
 
-				// On vanilla k8s, generate self-signed serving certs for services
-				// that have the OpenShift serving-cert annotation, and inject
-				// webhook cert volumes into Deployments.
+				// On vanilla k8s, provision TLS certs for services and webhooks.
+				// On OpenShift, OLM and the service-ca-operator handle this.
 				if isVanillaK8s() {
-					if err := certs.EnsureServingCerts(ctx, kubeconfig, targetNamespace, b.Package, manifests.Services, manifests.Deployments, manifests.Other); err != nil {
-						return fmt.Errorf("failed to provision serving certificates: %w", err)
-					}
-					// If the bundle has webhook configurations, inject the cert
-					// volume mount into the Deployment and create the TLS secret.
-					// On OpenShift, OLM handles this; on vanilla k8s we do it.
-					webhookSecretName := bundle.WebhookCertSecretName
-					injectionFlag, err := manifests.InjectWebhookCertVolumes(webhookSecretName)
-					if err != nil {
+					if err := provisionCerts(ctx, kubeconfig, targetNamespace, b.Package, manifests); err != nil {
 						return err
-					}
-					if injectionFlag {
-						if err := certs.EnsureWebhookCert(ctx, kubeconfig, targetNamespace, webhookSecretName, b.Package, manifests.Services, manifests.Other); err != nil {
-							return fmt.Errorf("failed to provision webhook certificate: %w", err)
-						}
 					}
 				}
 

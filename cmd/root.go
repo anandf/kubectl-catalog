@@ -60,6 +60,7 @@ var (
 	noWait            bool
 	deploymentTimeout time.Duration
 	installationType  string
+	certProvider      string
 )
 
 func init() {
@@ -77,6 +78,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&noWait, "no-wait", false, "skip deployment readiness checks after install/upgrade")
 	rootCmd.PersistentFlags().DurationVar(&deploymentTimeout, "deployment-timeout", 0, "timeout for deployment readiness checks (defaults to 5m; use --no-wait to skip entirely)")
 	rootCmd.PersistentFlags().StringVar(&installationType, "installation-type", "direct", "installation method: direct (apply manifests) or olm (create OLM Subscription)")
+	rootCmd.PersistentFlags().StringVar(&certProvider, "cert-provider", "self-signed", "TLS certificate provider for webhook/serving certs on vanilla k8s: self-signed, cert-manager, none")
 
 	registerStaticFlagCompletions()
 }
@@ -96,6 +98,15 @@ func validateInstallationType() error {
 		return fmt.Errorf("invalid --installation-type %q (valid values: direct, olm)", installationType)
 	}
 	return nil
+}
+
+func validateCertProvider() error {
+	switch certProvider {
+	case "self-signed", "cert-manager", "none":
+		return nil
+	default:
+		return fmt.Errorf("invalid --cert-provider %q (valid values: self-signed, cert-manager, none)", certProvider)
+	}
 }
 
 // resolveCatalogImage returns the catalog image to use.
@@ -310,6 +321,12 @@ func registerStaticFlagCompletions() {
 	}
 	err = rootCmd.RegisterFlagCompletionFunc("installation-type", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"direct", "olm"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	if err != nil {
+		slog.Error(err.Error())
+	}
+	err = rootCmd.RegisterFlagCompletionFunc("cert-provider", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"self-signed", "cert-manager", "none"}, cobra.ShellCompDirectiveNoFileComp
 	})
 	if err != nil {
 		slog.Error(err.Error())
