@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"github.com/anandf/kubectl-catalog/internal/bundle"
 	"github.com/anandf/kubectl-catalog/internal/catalog"
 	"github.com/anandf/kubectl-catalog/internal/certs"
+	"github.com/anandf/kubectl-catalog/internal/helm"
 	"github.com/anandf/kubectl-catalog/internal/registry"
 	"github.com/anandf/kubectl-catalog/internal/resolver"
 	"github.com/anandf/kubectl-catalog/internal/state"
@@ -22,12 +24,13 @@ import (
 )
 
 var (
-	generateChannel    string
-	generateVersion    string
-	generateMode       string
-	generateOutput     string
-	generateEnv        string
-	generatePushSecret string
+	generateChannel      string
+	generateVersion      string
+	generateMode         string
+	generateOutput       string
+	generateEnv          string
+	generatePushSecret   string
+	generateOutputFormat string
 )
 
 // generateMetadata holds the install context written alongside generated manifests.
@@ -107,6 +110,12 @@ Examples:
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
+		if err := validateOutputFormat(); err != nil {
+			return err
+		}
+
+		isHelmFormat := generateOutputFormat == "helm"
+
 		catalogImage, err := resolveCatalogImage("")
 		if err != nil {
 			return err
@@ -151,6 +160,10 @@ Examples:
 		isOCI := isOCIOutput(generateOutput)
 		namespaceExplicit := cmd.Flags().Changed("namespace")
 
+		if isHelmFormat && isOCI {
+			return fmt.Errorf("--output-format helm cannot be combined with OCI output yet; generate locally, then use 'helm push' to publish the chart")
+		}
+
 		// For OCI output, write to a temp directory first, then push
 		outputDir := generateOutput
 		if isOCI {
@@ -162,7 +175,11 @@ Examples:
 			outputDir = tmpDir
 		} else if outputDir == "" {
 			safePkg := filepath.Base(packageName)
-			outputDir = filepath.Join(".", fmt.Sprintf("%s-manifests", safePkg))
+			if isHelmFormat {
+				outputDir = filepath.Join(".", "charts", fmt.Sprintf("%s", safePkg))
+			} else {
+				outputDir = filepath.Join(".", "manifests", fmt.Sprintf("%s", safePkg))
+			}
 		}
 
 		var lastMeta *generateMetadata
@@ -184,7 +201,7 @@ Examples:
 				fmt.Printf("  Using suggested namespace %q from bundle\n", targetNamespace)
 			}
 
-			// Determine and apply install mode
+			// Determine and apply to install mode
 			mode := generateMode
 			if mode == "" {
 				mode = manifests.DefaultInstallMode()
@@ -206,22 +223,6 @@ Examples:
 				fmt.Printf("  Injected %d environment variable(s) into operator containers\n", len(envVars))
 			}
 
-			// Stamp tracking labels and annotations on all resources
-			labels := state.TrackingLabels(b.Package)
-			annotations := state.TrackingAnnotations(b.Version, b.Channel, b.Name, b.Image, catalogImage)
-			for _, obj := range manifests.AllResources() {
-				stampTrackingMetadata(obj, labels, annotations)
-				// Set namespace on namespaced resources
-				if isNamespacedKind(obj.GetKind()) && obj.GetNamespace() == "" {
-					obj.SetNamespace(targetNamespace)
-				}
-				// Fill in namespace on binding subjects
-				err := setSubjectNamespaces(obj, targetNamespace)
-				if err != nil {
-					return err
-				}
-			}
-
 			// For multi-bundle plans, put each bundle in a subdirectory
 			bundleOutputDir := outputDir
 			if len(installPlan.Bundles) > 1 {
@@ -229,14 +230,43 @@ Examples:
 				bundleOutputDir = filepath.Join(outputDir, safeBundleName)
 			}
 
-			if err := writeManifests(bundleOutputDir, manifests, targetNamespace, &b, catalogImage, mode); err != nil {
-				return fmt.Errorf("failed to write manifests for %q: %w", b.Name, err)
-			}
+			if isHelmFormat {
+				chartGen := &helm.ChartGenerator{
+					PackageName:  b.Package,
+					Version:      b.Version,
+					Channel:      b.Channel,
+					CatalogRef:   catalogImage,
+					Manifests:    manifests,
+					CertProvider: certProvider,
+					InstallMode:  mode,
+					Namespace:    targetNamespace,
+				}
+				if err := chartGen.Generate(bundleOutputDir); err != nil {
+					return fmt.Errorf("failed to generate Helm chart for %q: %w", b.Name, err)
+				}
+			} else {
+				// Stamp tracking labels and annotations on all resources
+				labels := state.TrackingLabels(b.Package)
+				annotations := state.TrackingAnnotations(b.Version, b.Channel, b.Name, b.Image, catalogImage)
+				for _, obj := range manifests.AllResources() {
+					stampTrackingMetadata(obj, labels, annotations)
+					if isNamespacedKind(obj.GetKind()) && obj.GetNamespace() == "" {
+						obj.SetNamespace(targetNamespace)
+					}
+					err := setSubjectNamespaces(obj, targetNamespace)
+					if err != nil {
+						return err
+					}
+				}
 
-			// Generate cert resources for vanilla k8s
-			if isVanillaK8s() {
-				if err := generateCertResources(bundleOutputDir, targetNamespace, b.Package, manifests); err != nil {
-					return fmt.Errorf("failed to generate cert resources: %w", err)
+				if err := writeManifests(bundleOutputDir, manifests, targetNamespace, &b, catalogImage, mode); err != nil {
+					return fmt.Errorf("failed to write manifests for %q: %w", b.Name, err)
+				}
+
+				if isVanillaK8s() {
+					if err := generateCertResources(bundleOutputDir, targetNamespace, b.Package, manifests); err != nil {
+						return fmt.Errorf("failed to generate cert resources: %w", err)
+					}
 				}
 			}
 
@@ -254,7 +284,11 @@ Examples:
 			}
 
 			if !isOCI {
-				fmt.Printf("\nManifests written to %s\n", bundleOutputDir)
+				if isHelmFormat {
+					fmt.Printf("\nHelm chart written to %s\n", bundleOutputDir)
+				} else {
+					fmt.Printf("\nManifests written to %s\n", bundleOutputDir)
+				}
 			}
 		}
 
@@ -264,6 +298,9 @@ Examples:
 			if err := pushToOCI(ctx, outputDir, ociRef, lastMeta); err != nil {
 				return err
 			}
+		} else if isHelmFormat {
+			fmt.Printf("\nInstall the chart with:\n")
+			fmt.Printf("  helm install %s %s -n %s --create-namespace\n", lastMeta.PackageName, outputDir, lastMeta.Namespace)
 		} else {
 			fmt.Printf("\nReview the generated manifests, then apply with:\n")
 			fmt.Printf("  kubectl catalog apply %s\n", outputDir)
@@ -669,6 +706,14 @@ func init() {
 	generateCmd.Flags().StringVarP(&generateOutput, "output", "o", "", "output destination: local directory or oci:// registry reference (defaults to ./<package-name>-manifests)")
 	generateCmd.Flags().StringVar(&generateEnv, "env", "", "comma-separated environment variables to inject into operator containers (e.g. KEY1=val1,KEY2=val2)")
 	generateCmd.Flags().StringVar(&generatePushSecret, "push-secret", "", "path to a credentials file for OCI push authentication (only used with oci:// output)")
+	generateCmd.Flags().StringVar(&generateOutputFormat, "output-format", "yaml", "output format: yaml (flat manifests) or helm (Helm chart)")
 	generateCmd.ValidArgsFunction = completeCatalogPackages
+	registerInstallModeCompletion(generateCmd)
+	err := generateCmd.RegisterFlagCompletionFunc("output-format", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"yaml", "helm"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	if err != nil {
+		slog.Error(err.Error())
+	}
 	rootCmd.AddCommand(generateCmd)
 }

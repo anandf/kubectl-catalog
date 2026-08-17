@@ -107,7 +107,76 @@ func extractFromCSV(csv *unstructured.Unstructured) (*Manifests, error) {
 		}
 	}
 
+	manifests.CSVMetadata = extractCSVMetadata(csv)
+
 	return manifests, nil
+}
+
+func extractCSVMetadata(csv *unstructured.Unstructured) *CSVMetadata {
+	meta := &CSVMetadata{}
+
+	meta.DisplayName, _, _ = unstructured.NestedString(csv.Object, "spec", "displayName")
+	meta.Description, _, _ = unstructured.NestedString(csv.Object, "spec", "description")
+	meta.Version, _, _ = unstructured.NestedString(csv.Object, "spec", "version")
+	meta.Maturity, _, _ = unstructured.NestedString(csv.Object, "spec", "maturity")
+	meta.MinKubeVersion, _, _ = unstructured.NestedString(csv.Object, "spec", "minKubeVersion")
+
+	if kw, found, _ := unstructured.NestedStringSlice(csv.Object, "spec", "keywords"); found {
+		meta.Keywords = kw
+	}
+
+	if maintainers, found, _ := unstructured.NestedSlice(csv.Object, "spec", "maintainers"); found {
+		for _, m := range maintainers {
+			mMap, ok := m.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name, _ := mMap["name"].(string)
+			email, _ := mMap["email"].(string)
+			if name != "" || email != "" {
+				meta.Maintainers = append(meta.Maintainers, CSVMaintainer{Name: name, Email: email})
+			}
+		}
+	}
+
+	if providerMap, found, _ := unstructured.NestedMap(csv.Object, "spec", "provider"); found {
+		meta.Provider.Name, _ = providerMap["name"].(string)
+		meta.Provider.URL, _ = providerMap["url"].(string)
+	}
+
+	if links, found, _ := unstructured.NestedSlice(csv.Object, "spec", "links"); found {
+		for _, l := range links {
+			lMap, ok := l.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name, _ := lMap["name"].(string)
+			url, _ := lMap["url"].(string)
+			if name != "" || url != "" {
+				meta.Links = append(meta.Links, CSVLink{Name: name, URL: url})
+			}
+		}
+	}
+
+	if icons, found, _ := unstructured.NestedSlice(csv.Object, "spec", "icon"); found && len(icons) > 0 {
+		if iconMap, ok := icons[0].(map[string]interface{}); ok {
+			data, _ := iconMap["base64data"].(string)
+			mediaType, _ := iconMap["mediatype"].(string)
+			if data != "" {
+				meta.Icon = &CSVIcon{Data: data, MediaType: mediaType}
+			}
+		}
+	}
+
+	csvAnnotations := csv.GetAnnotations()
+	if len(csvAnnotations) > 0 {
+		meta.Annotations = make(map[string]string, len(csvAnnotations))
+		for k, v := range csvAnnotations {
+			meta.Annotations[k] = v
+		}
+	}
+
+	return meta
 }
 
 func convertToDeployment(depMap map[string]interface{}) (*unstructured.Unstructured, error) {

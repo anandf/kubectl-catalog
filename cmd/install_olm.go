@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func installViaOLM(cmd *cobra.Command, ctx context.Context, packageName string) error {
+func installViaOLM(_ *cobra.Command, ctx context.Context, packageName string) error {
 	catalogImage, err := resolveCatalogImage("")
 	if err != nil {
 		return err

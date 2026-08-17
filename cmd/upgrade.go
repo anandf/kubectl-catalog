@@ -249,7 +249,7 @@ the catalog reference stored in the installed resource annotations is used.`,
 			}
 		}
 
-		// Validate and apply the install mode
+		// Validate and apply the installation mode
 		if err := applyInstallMode(manifests, upgradeMode, targetNamespace); err != nil {
 			return err
 		}
@@ -496,5 +496,6 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeEnv, "env", "", "comma-separated environment variables to inject into operator containers (e.g. KEY1=val1,KEY2=val2)")
 	upgradeCmd.Flags().BoolVar(&upgradeDiff, "diff", false, "show diff of current vs new manifests without applying")
 	upgradeCmd.ValidArgsFunction = completeInstalledPackages
+	registerInstallModeCompletion(upgradeCmd)
 	rootCmd.AddCommand(upgradeCmd)
 }

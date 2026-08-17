@@ -109,6 +109,15 @@ func validateCertProvider() error {
 	}
 }
 
+func validateOutputFormat() error {
+	switch generateOutputFormat {
+	case "yaml", "helm":
+		return nil
+	default:
+		return fmt.Errorf("invalid --output-format %q (valid values: yaml, helm)", generateOutputFormat)
+	}
+}
+
 // resolveCatalogImage returns the catalog image to use.
 // Priority: --catalog (full image ref) > --type + --ocp-version.
 // For commands that have their own --catalog flag, pass that value as cmdCatalog.
@@ -190,22 +199,15 @@ func applyInstallMode(manifests *bundle.Manifests, mode, targetNamespace string)
 			mode, strings.Join(supported, ", "))
 	}
 
-	switch mode {
-	case "AllNamespaces":
-		err := manifests.SetWatchNamespace("")
-		if err != nil {
-			return err
-		}
-		fmt.Printf("  Install mode: AllNamespaces (operator watches all namespaces)\n")
-	case "SingleNamespace":
-	case "OwnNamespace":
-		err := manifests.SetWatchNamespace(targetNamespace)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("  Install mode: %s (operator watches namespace %q)\n", mode, targetNamespace)
+	nsToWatch := ""
+	if mode != "AllNamespaces" {
+		nsToWatch = targetNamespace
 	}
-
+	err := manifests.SetWatchNamespace(nsToWatch)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("  Install mode: %s (operator watches namespace %q)\n", mode, nsToWatch)
 	return nil
 }
 
@@ -332,13 +334,16 @@ func registerStaticFlagCompletions() {
 		slog.Error(err.Error())
 	}
 
-	for _, cmd := range []*cobra.Command{installCmd, upgradeCmd, generateCmd} {
-		err = cmd.RegisterFlagCompletionFunc("install-mode", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-			return []string{"AllNamespaces", "SingleNamespace", "OwnNamespace"}, cobra.ShellCompDirectiveNoFileComp
-		})
-		if err != nil {
-			slog.Error(err.Error())
-		}
+}
+
+// registerInstallModeCompletion registers the install-mode flag completion on a command.
+// Called from each command's init() to avoid init ordering issues.
+func registerInstallModeCompletion(cmd *cobra.Command) {
+	err := cmd.RegisterFlagCompletionFunc("install-mode", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"AllNamespaces", "SingleNamespace", "OwnNamespace"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	if err != nil {
+		slog.Error(err.Error())
 	}
 }
 

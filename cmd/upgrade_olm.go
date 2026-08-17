@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func upgradeViaOLM(cmd *cobra.Command, ctx context.Context, packageName string) error {
+func upgradeViaOLM(_ *cobra.Command, ctx context.Context, packageName string) error {
 	if upgradeDiff {
 		fmt.Println("Warning: --diff is not supported with --installation-type=olm")
 	}

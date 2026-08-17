@@ -176,7 +176,7 @@ If the operator is already installed, use --force to re-install.`,
 					}
 				}
 
-				// Validate and apply the install mode
+				// Validate and apply the installation mode
 				if err := applyInstallMode(manifests, installMode, targetNamespace); err != nil {
 					return err
 				}
@@ -323,5 +323,6 @@ func init() {
 	installCmd.Flags().StringVar(&installMode, "install-mode", "", "install mode: AllNamespaces, SingleNamespace, OwnNamespace (defaults to operator's preferred mode)")
 	installCmd.Flags().StringVar(&installEnv, "env", "", "comma-separated environment variables to inject into operator containers (e.g. KEY1=val1,KEY2=val2)")
 	installCmd.ValidArgsFunction = completeCatalogPackages
+	registerInstallModeCompletion(installCmd)
 	rootCmd.AddCommand(installCmd)
 }

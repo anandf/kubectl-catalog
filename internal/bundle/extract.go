@@ -34,6 +34,47 @@ type ConversionWebhookInfo struct {
 	ConversionReviewVersions []string
 }
 
+// CSVMaintainer represents a maintainer entry from the CSV spec.
+type CSVMaintainer struct {
+	Name  string
+	Email string
+}
+
+// CSVProvider represents the operator provider from the CSV spec.
+type CSVProvider struct {
+	Name string
+	URL  string
+}
+
+// CSVLink represents a link entry from the CSV spec.
+type CSVLink struct {
+	Name string
+	URL  string
+}
+
+// CSVIcon represents an operator icon from the CSV spec.
+type CSVIcon struct {
+	Data      string // base64-encoded image data
+	MediaType string
+}
+
+// CSVMetadata holds operator metadata extracted from the ClusterServiceVersion.
+// This metadata is not used during install/apply but is valuable for generating
+// Helm charts (Chart.yaml) and other documentation.
+type CSVMetadata struct {
+	DisplayName    string
+	Description    string
+	Version        string
+	Maturity       string
+	MinKubeVersion string
+	Keywords       []string
+	Maintainers    []CSVMaintainer
+	Provider       CSVProvider
+	Links          []CSVLink
+	Icon           *CSVIcon
+	Annotations    map[string]string
+}
+
 // Manifests holds the extracted and transformed Kubernetes resources from a bundle.
 type Manifests struct {
 	CRDs        []*unstructured.Unstructured
@@ -52,6 +93,9 @@ type Manifests struct {
 	// ConversionWebhooks holds conversion webhook info extracted from the CSV's
 	// spec.webhookdefinitions. These are used to patch CRDs with conversion config.
 	ConversionWebhooks []ConversionWebhookInfo
+
+	// CSVMetadata holds operator metadata from the ClusterServiceVersion.
+	CSVMetadata *CSVMetadata
 }
 
 // SupportsInstallMode returns true if the bundle supports the given install mode type.
@@ -162,6 +206,9 @@ func Extract(bundleDir string) (*Manifests, error) {
 				}
 				if len(extracted.InstallModes) > 0 {
 					manifests.InstallModes = extracted.InstallModes
+				}
+				if extracted.CSVMetadata != nil {
+					manifests.CSVMetadata = extracted.CSVMetadata
 				}
 				continue
 			}
@@ -613,11 +660,7 @@ func classifyAndAdd(m *Manifests, obj *unstructured.Unstructured) {
 	switch gvk.Kind {
 	case "CustomResourceDefinition":
 		m.CRDs = append(m.CRDs, obj)
-	case "ClusterRole":
-	case "ClusterRoleBinding":
-	case "Role":
-	case "RoleBinding":
-	case "ServiceAccount":
+	case "ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding", "ServiceAccount":
 		m.RBAC = append(m.RBAC, obj)
 	case "Deployment":
 		m.Deployments = append(m.Deployments, obj)
