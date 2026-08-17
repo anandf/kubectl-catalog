@@ -7,6 +7,8 @@ kubectl catalog search prometheus --ocp-version 4.20 --pull-secret ~/pull-secret
 kubectl catalog search --what-provides argoproj.io/ArgoCD --ocp-version 4.20
 kubectl catalog install cluster-logging --ocp-version 4.20 --pull-secret ~/pull-secret.json
 kubectl catalog generate cluster-logging --ocp-version 4.20 --pull-secret ~/pull-secret.json
+kubectl catalog generate my-operator --output-format helm --ocp-version 4.20 --pull-secret ~/pull-secret.json
+kubectl catalog generate my-operator --output-format kustomize --ocp-version 4.20 --pull-secret ~/pull-secret.json
 kubectl catalog generate my-operator -o oci://quay.io/myorg/my-operator --push-secret ~/creds.json
 kubectl catalog apply ./cluster-logging-manifests
 kubectl catalog apply oci://quay.io/myorg/my-operator:stable-v6.1
@@ -48,7 +50,7 @@ Neither option is ideal for teams running vanilla Kubernetes (EKS, AKS, GKE, k3s
 
 | Concern | Helm | kubectl-catalog |
 |---|---|---|
-| **Availability** | Helm charts don't exist for most OLM operators | Uses existing OLM bundles directly — no re-packaging needed |
+| **Availability** | Helm charts don't exist for most OLM operators | Uses OLM bundles directly, or generates Helm charts from them (`--output-format helm`) |
 | **Dependency resolution** | No built-in operator dependency resolution | Resolves `olm.package.required` and `olm.gvk.required` dependencies with semver constraints |
 | **Upgrade semantics** | "Apply the new chart" — no upgrade safety | Honors `replaces`, `skips`, and `skipRange` upgrade edges to prevent incompatible upgrades |
 | **Maintenance** | Someone must create and maintain separate Helm charts | Taps directly into operator authors' release stream |
@@ -60,6 +62,8 @@ Neither option is ideal for teams running vanilla Kubernetes (EKS, AKS, GKE, k3s
 - **List** available operators with channel details, or list what's installed in your cluster
 - **Install** operators with full dependency resolution (package and GVK dependencies)
 - **Generate + Apply** — two-step workflow to inspect and customize manifests before deploying
+- **Helm chart generation** — produce fully functional Helm charts from OLM bundles with configurable values for images, resources, RBAC, TLS, and scheduling
+- **Kustomize output** — generate a base + overlays structure with image, replica, and resource patch transformers for GitOps-ready Kustomize workflows
 - **OCI GitOps** — push manifests as OCI artifacts for Argo CD v3.1+ and FluxCD, no Git repo required
 - **Upgrade** operators following the catalog's upgrade graph (replaces/skips/skipRange)
 - **Uninstall** operators immediately; CRDs preserved by default (use `--force` with confirmation to remove); cleans up pull secrets and managed namespaces
@@ -198,7 +202,191 @@ kubectl catalog apply ./cluster-logging-manifests -n custom-namespace
 kubectl catalog generate cluster-logging --ocp-version 4.20 -o /tmp/my-manifests --pull-secret ~/pull-secret.json
 ```
 
-### 4. Push to OCI registry for GitOps (Argo CD / FluxCD)
+### 4. Generate a Helm chart
+
+Instead of flat YAML manifests, generate a complete Helm chart that can be customized via `values.yaml` and installed with `helm install`:
+
+```bash
+# Generate a Helm chart from the Red Hat catalog
+kubectl catalog generate openshift-gitops-operator --ocp-version 4.20 \
+  --output-format helm --pull-secret ~/pull-secret.json
+
+# Generate with cert-manager support (instead of self-signed)
+kubectl catalog generate my-operator --ocp-version 4.20 \
+  --output-format helm --cert-provider cert-manager --pull-secret ~/pull-secret.json
+
+# Generate from OperatorHub.io (no pull secret needed)
+kubectl catalog generate prometheus --catalog-type operatorhub --output-format helm
+```
+
+This creates a `./<package>-chart/` directory with a standard Helm chart structure:
+
+```
+my-operator-chart/
+├── .helmignore
+├── Chart.yaml              # Metadata from the CSV (description, keywords, maintainers)
+├── values.yaml             # All configurable values with bundle defaults
+├── crds/                   # Raw CRDs (applied on helm install, not on upgrade)
+│   └── myresource.example.com.yaml
+└── templates/
+    ├── _helpers.tpl         # Named templates (fullname, labels, image, serviceAccountName)
+    ├── NOTES.txt            # Post-install instructions
+    ├── deployment.yaml      # Templatized deployment
+    ├── serviceaccount.yaml  # Conditional on serviceAccount.create
+    ├── rbac.yaml            # Install-mode-aware (ClusterRole or Role)
+    ├── service.yaml         # Configurable type and annotations
+    ├── webhook-configs.yaml # Conditional on webhooks.enabled
+    ├── cert-manager.yaml    # Conditional on certManager.enabled
+    ├── self-signed-certs.yaml # Fallback when cert-manager is disabled
+    ├── monitoring.yaml      # Conditional on monitoring.enabled
+    ├── manager-config.yaml  # Operator ConfigMaps
+    └── ...
+```
+
+#### Configurable values
+
+The generated `values.yaml` includes all overridable settings with defaults extracted from the bundle:
+
+```yaml
+# Container images (override for air-gapped or custom builds)
+image:
+  manager:
+    registry: quay.io
+    repository: example/operator
+    tag: "v1.0.0"
+    pullPolicy: IfNotPresent
+
+# Operator image env vars (RELATED_IMAGE_*, etc.)
+# Both RELATED_IMAGE_X and X point to the same values key
+operatorImageEnv:
+  ARGOCD_IMAGE: "quay.io/argoproj/argocd:v2.10"
+  ARGOCD_AGENT_IMAGE: "quay.io/argoproj/agent:v1.0"
+
+# Install mode controls RBAC scope and WATCH_NAMESPACE
+installMode: "AllNamespaces"    # AllNamespaces → ClusterRole; SingleNamespace → Role
+watchNamespace: ""              # Override the watched namespace
+
+# Standard Helm overrides
+replicaCount: 1
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# TLS certificate management for webhooks
+certManager:
+  enabled: false               # Toggle between cert-manager and self-signed
+  issuer:
+    kind: Issuer               # Or ClusterIssuer
+    name: ""                   # Use an existing issuer
+```
+
+#### Install and customize
+
+```bash
+# Install with default values
+helm install my-operator ./my-operator-chart -n operators --create-namespace
+
+# Override images for an air-gapped environment
+helm install my-operator ./my-operator-chart -n operators \
+  --set image.manager.registry=internal-registry.example.com \
+  --set operatorImageEnv.ARGOCD_IMAGE=internal-registry.example.com/argocd:v2.10
+
+# Switch to SingleNamespace mode with cert-manager
+helm install my-operator ./my-operator-chart -n operators \
+  --set installMode=SingleNamespace \
+  --set certManager.enabled=true
+
+# Upgrade when a new operator version is available
+kubectl catalog generate my-operator --ocp-version 4.21 --output-format helm --pull-secret ~/ps.json
+helm upgrade my-operator ./my-operator-chart -n operators
+```
+
+### 5. Generate Kustomize manifests
+
+For teams that use Kustomize for configuration management and GitOps, generate a base + overlays structure:
+
+```bash
+# Generate kustomize manifests
+kubectl catalog generate my-operator --ocp-version 4.20 \
+  --output-format kustomize --pull-secret ~/pull-secret.json
+
+# Generate from OperatorHub.io
+kubectl catalog generate prometheus --catalog-type operatorhub --output-format kustomize
+```
+
+This creates a `./kustomize/<package>/` directory:
+
+```
+my-operator/
+├── base/
+│   ├── kustomization.yaml          # Lists all resources with common labels
+│   ├── crds/
+│   │   └── widgets.example.com.yaml
+│   ├── deployment.yaml
+│   ├── serviceaccount.yaml
+│   ├── clusterrole.yaml
+│   ├── clusterrolebinding.yaml
+│   ├── service.yaml
+│   ├── manager-config.yaml         # Operator ConfigMaps
+│   ├── servicemonitor.yaml         # Prometheus ServiceMonitors
+│   └── ...
+└── overlays/
+    └── default/
+        ├── kustomization.yaml      # namespace, images, replicas transformers
+        └── resources.yaml          # Commented-out merge patch for resources/scheduling
+```
+
+#### What the overlay provides
+
+The `overlays/default/kustomization.yaml` includes ready-to-customize transformers:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+namespace: operator-system
+
+# Override images for air-gapped or custom builds
+images:
+  - name: quay.io/example/operator:v1.0.0
+    newName: quay.io/example/operator
+    newTag: "v1.0.0"
+  - name: quay.io/example/kube-rbac-proxy:v0.15
+    newName: quay.io/example/kube-rbac-proxy
+    newTag: "v0.15"
+
+# Scale replicas
+replicas:
+  - name: controller-manager
+    count: 1
+```
+
+The `resources.yaml` file contains a commented-out strategic merge patch for resource limits, nodeSelector, and tolerations — uncomment and activate it by enabling the `patches:` block in `kustomization.yaml`.
+
+#### Apply and create environment overlays
+
+```bash
+# Preview the rendered output
+kubectl kustomize ./kustomize/my-operator/overlays/default
+
+# Apply directly
+kubectl apply -k ./kustomize/my-operator/overlays/default
+
+# Create a production overlay with different images and namespace
+cp -r ./kustomize/my-operator/overlays/default ./kustomize/my-operator/overlays/prod
+# Edit prod/kustomization.yaml:
+#   - Change namespace to "production"
+#   - Point images to an internal mirror
+#   - Increase replica count
+
+# Apply the production overlay
+kubectl apply -k ./kustomize/my-operator/overlays/prod
+```
+
+### 6. Push to OCI registry for GitOps (Argo CD / FluxCD)
+
 
 For cluster administrators who prefer not to use Git workflows, manifests can be pushed
 as standard OCI artifacts and consumed directly by Argo CD or FluxCD. The `generate`
@@ -285,7 +473,7 @@ oras pull registry.example.com/operators/cluster-logging:v5.8.1 -o ./manifests
 kubectl catalog apply ./manifests
 ```
 
-### 5. Check what's installed
+### 7. Check what's installed
 
 ```bash
 kubectl catalog list --installed
@@ -298,7 +486,7 @@ cluster-logging         5.8.1     stable    12          registry.example.com/cat
 elasticsearch-operator  5.8.0     stable    8           registry.example.com/catalog:v4.20
 ```
 
-### 6. Check operator health
+### 8. Check operator health
 
 ```bash
 # Show deployment status, pod health, and CRD readiness
@@ -328,7 +516,7 @@ CRDs:
   clusterloggings.logging.openshift.io                 [Established]
 ```
 
-### 7. Upgrade an operator
+### 9. Upgrade an operator
 
 ```bash
 # Preview what will change before upgrading
@@ -341,7 +529,7 @@ kubectl catalog upgrade cluster-logging --ocp-version 4.20 --pull-secret ~/pull-
 kubectl catalog upgrade cluster-logging --ocp-version 4.20 --channel stable-6.0 --pull-secret ~/pull-secret.json
 ```
 
-### 8. Uninstall an operator
+### 10. Uninstall an operator
 
 ```bash
 # Uninstall (preserves CRDs and custom resources by default)
@@ -351,7 +539,7 @@ kubectl catalog uninstall cluster-logging
 kubectl catalog uninstall cluster-logging --force
 ```
 
-### 9. Check version
+### 11. Check version
 
 ```bash
 kubectl catalog version
@@ -365,7 +553,7 @@ kubectl-catalog version 0.0.1
   go version: go1.26.0
 ```
 
-### 9. Manage cache
+### 12. Manage cache
 
 ```bash
 # Remove all cached catalogs and bundles
@@ -412,8 +600,10 @@ kubectl catalog clean --bundles
 | `--env` | Comma-separated environment variables to inject into all operator containers (e.g. `KEY1=val1,KEY2=val2`). Mirrors OLM Subscription `spec.config.env`. |
 | `--diff` | Show diff of current vs new manifests without applying (upgrade only) |
 | `--force` | Force re-install if already installed (install only) |
-| `-o, --output` | Output destination: local directory or `oci://` registry reference (generate only; defaults to `./<package-name>-manifests`). When using `oci://`, if no tag is specified, the resolved channel name or `v<version>` is used automatically. |
+| `-o, --output` | Output destination: local directory or `oci://` registry reference (generate only; defaults to `./manifests/<package>` for yaml, `./charts/<package>` for helm, `./kustomize/<package>` for kustomize). |
+| `--output-format` | Output format: `yaml` (flat manifests, default), `helm` (Helm chart), or `kustomize` (base + overlays). Generate only. |
 | `--push-secret` | Path to a credentials file for OCI push authentication (generate only; used with `oci://` output) |
+| `--cert-provider` | TLS certificate provider for webhooks: `self-signed` (default), `cert-manager`, `none` |
 
 ### Uninstall Flags
 
@@ -709,6 +899,8 @@ The pull secret is a standard Docker config JSON file:
 │   ├── bundle/                # Bundle extraction, CSV conversion, install modes
 │   ├── catalog/               # FBC parsing, caching, type definitions
 │   ├── certs/                 # Self-signed serving certificate generation (vanilla k8s)
+│   ├── helm/                  # Helm chart generation from OLM bundles
+│   ├── kustomize/             # Kustomize base+overlays generation from OLM bundles
 │   ├── registry/              # Image pulling (go-containerregistry), tar extraction
 │   ├── resolver/              # Dependency resolution, upgrade graph BFS
 │   ├── state/                 # Annotation-based installed state discovery

@@ -15,6 +15,7 @@ import (
 	"github.com/anandf/kubectl-catalog/internal/catalog"
 	"github.com/anandf/kubectl-catalog/internal/certs"
 	"github.com/anandf/kubectl-catalog/internal/helm"
+	kustomizegen "github.com/anandf/kubectl-catalog/internal/kustomize"
 	"github.com/anandf/kubectl-catalog/internal/registry"
 	"github.com/anandf/kubectl-catalog/internal/resolver"
 	"github.com/anandf/kubectl-catalog/internal/state"
@@ -57,6 +58,10 @@ This resolves the bundle, extracts manifests, applies all transformations
 (namespace, install mode, WATCH_NAMESPACE, serving certs), and writes the
 final YAML files to an output destination.
 
+Output format (--output-format):
+  yaml (default):  Flat numbered YAML files, ready for kubectl apply
+  helm:            A complete Helm chart with templatized values
+
 Output destination (--output / -o):
   Local directory (default):  -o ./my-manifests  or omit for ./<package>-manifests/
   OCI registry:               -o oci://quay.io/myorg/my-operator:v1.2
@@ -64,6 +69,15 @@ Output destination (--output / -o):
 When pushing to an OCI registry, the artifact uses a single layer with media type
 application/vnd.oci.image.layer.v1.tar+gzip, compatible with Argo CD and FluxCD.
 Use --push-secret for registry authentication when pushing.
+
+Helm chart generation (--output-format helm):
+  Produces a fully functional Helm chart with:
+  - Configurable images, replicas, resources, probes, and scheduling via values.yaml
+  - Operator image env vars (RELATED_IMAGE_*, etc.) as overridable values
+  - Install-mode-aware RBAC (ClusterRole for AllNamespaces, Role for SingleNamespace)
+  - Dynamic WATCH_NAMESPACE driven by values.installMode
+  - Cert-manager or self-signed TLS for webhooks (toggle via values.certManager.enabled)
+  - Standard Helm labels, annotations, and named templates
 
 Supports all the same flags as "kubectl catalog install":
   --ocp-version      OCP version to derive the catalog image
@@ -79,6 +93,7 @@ Supports all the same flags as "kubectl catalog install":
   --push-secret      Path to a credentials file for OCI push authentication
   --cache-dir        Directory for caching catalog and bundle images
   --refresh          Force re-pull of cached catalog images
+  --output-format    Output format: yaml (flat manifests) or helm (Helm chart)
 
 On vanilla Kubernetes (--cluster-type k8s), self-signed TLS serving certificates
 are generated for services that use the OpenShift serving-cert annotation.
@@ -87,8 +102,15 @@ Use "kubectl catalog apply <source>" to apply the generated manifests.
 The <source> can be a local directory or an oci:// reference.
 
 Examples:
-  # Generate to local directory (default)
+  # Generate flat YAML manifests to local directory (default)
   kubectl catalog generate cluster-logging --ocp-version 4.20 --pull-secret ~/ps.json
+
+  # Generate a Helm chart
+  kubectl catalog generate my-operator --ocp-version 4.20 --output-format helm --pull-secret ~/ps.json
+
+  # Generate a Helm chart with cert-manager support
+  kubectl catalog generate my-operator --ocp-version 4.20 --output-format helm \
+    --cert-provider cert-manager --pull-secret ~/ps.json
 
   # Generate to a custom output directory
   kubectl catalog generate my-operator --ocp-version 4.20 -o /tmp/manifests --pull-secret ~/ps.json
@@ -115,6 +137,7 @@ Examples:
 		}
 
 		isHelmFormat := generateOutputFormat == "helm"
+		isKustomizeFormat := generateOutputFormat == "kustomize"
 
 		catalogImage, err := resolveCatalogImage("")
 		if err != nil {
@@ -163,6 +186,9 @@ Examples:
 		if isHelmFormat && isOCI {
 			return fmt.Errorf("--output-format helm cannot be combined with OCI output yet; generate locally, then use 'helm push' to publish the chart")
 		}
+		if isKustomizeFormat && isOCI {
+			return fmt.Errorf("--output-format kustomize cannot be combined with OCI output; generate locally, then push the directory as an OCI artifact")
+		}
 
 		// For OCI output, write to a temp directory first, then push
 		outputDir := generateOutput
@@ -175,10 +201,13 @@ Examples:
 			outputDir = tmpDir
 		} else if outputDir == "" {
 			safePkg := filepath.Base(packageName)
-			if isHelmFormat {
-				outputDir = filepath.Join(".", "charts", fmt.Sprintf("%s", safePkg))
-			} else {
-				outputDir = filepath.Join(".", "manifests", fmt.Sprintf("%s", safePkg))
+			switch {
+			case isHelmFormat:
+				outputDir = filepath.Join(".", "charts", safePkg)
+			case isKustomizeFormat:
+				outputDir = filepath.Join(".", "kustomize", safePkg)
+			default:
+				outputDir = filepath.Join(".", "manifests", safePkg)
 			}
 		}
 
@@ -244,6 +273,20 @@ Examples:
 				if err := chartGen.Generate(bundleOutputDir); err != nil {
 					return fmt.Errorf("failed to generate Helm chart for %q: %w", b.Name, err)
 				}
+			} else if isKustomizeFormat {
+				kustomizeGen := &kustomizegen.KustomizeGenerator{
+					PackageName:  b.Package,
+					Version:      b.Version,
+					Channel:      b.Channel,
+					CatalogRef:   catalogImage,
+					Manifests:    manifests,
+					CertProvider: certProvider,
+					InstallMode:  mode,
+					Namespace:    targetNamespace,
+				}
+				if err := kustomizeGen.Generate(bundleOutputDir); err != nil {
+					return fmt.Errorf("failed to generate Kustomize manifests for %q: %w", b.Name, err)
+				}
 			} else {
 				// Stamp tracking labels and annotations on all resources
 				labels := state.TrackingLabels(b.Package)
@@ -284,9 +327,12 @@ Examples:
 			}
 
 			if !isOCI {
-				if isHelmFormat {
+				switch {
+				case isHelmFormat:
 					fmt.Printf("\nHelm chart written to %s\n", bundleOutputDir)
-				} else {
+				case isKustomizeFormat:
+					fmt.Printf("\nKustomize manifests written to %s\n", bundleOutputDir)
+				default:
 					fmt.Printf("\nManifests written to %s\n", bundleOutputDir)
 				}
 			}
@@ -301,6 +347,11 @@ Examples:
 		} else if isHelmFormat {
 			fmt.Printf("\nInstall the chart with:\n")
 			fmt.Printf("  helm install %s %s -n %s --create-namespace\n", lastMeta.PackageName, outputDir, lastMeta.Namespace)
+		} else if isKustomizeFormat {
+			fmt.Printf("\nReview and customize the overlay, then apply with:\n")
+			fmt.Printf("  kubectl apply -k %s/overlays/default\n", outputDir)
+			fmt.Printf("\nOr preview the output with:\n")
+			fmt.Printf("  kubectl kustomize %s/overlays/default\n", outputDir)
 		} else {
 			fmt.Printf("\nReview the generated manifests, then apply with:\n")
 			fmt.Printf("  kubectl catalog apply %s\n", outputDir)
@@ -706,11 +757,11 @@ func init() {
 	generateCmd.Flags().StringVarP(&generateOutput, "output", "o", "", "output destination: local directory or oci:// registry reference (defaults to ./<package-name>-manifests)")
 	generateCmd.Flags().StringVar(&generateEnv, "env", "", "comma-separated environment variables to inject into operator containers (e.g. KEY1=val1,KEY2=val2)")
 	generateCmd.Flags().StringVar(&generatePushSecret, "push-secret", "", "path to a credentials file for OCI push authentication (only used with oci:// output)")
-	generateCmd.Flags().StringVar(&generateOutputFormat, "output-format", "yaml", "output format: yaml (flat manifests) or helm (Helm chart)")
+	generateCmd.Flags().StringVar(&generateOutputFormat, "output-format", "yaml", "output format: yaml (flat manifests), helm (Helm chart), or kustomize (Kustomize base+overlays)")
 	generateCmd.ValidArgsFunction = completeCatalogPackages
 	registerInstallModeCompletion(generateCmd)
 	err := generateCmd.RegisterFlagCompletionFunc("output-format", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-		return []string{"yaml", "helm"}, cobra.ShellCompDirectiveNoFileComp
+		return []string{"yaml", "helm", "kustomize"}, cobra.ShellCompDirectiveNoFileComp
 	})
 	if err != nil {
 		slog.Error(err.Error())

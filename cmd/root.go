@@ -111,10 +111,10 @@ func validateCertProvider() error {
 
 func validateOutputFormat() error {
 	switch generateOutputFormat {
-	case "yaml", "helm":
+	case "yaml", "helm", "kustomize":
 		return nil
 	default:
-		return fmt.Errorf("invalid --output-format %q (valid values: yaml, helm)", generateOutputFormat)
+		return fmt.Errorf("invalid --output-format %q (valid values: yaml, helm, kustomize)", generateOutputFormat)
 	}
 }
 

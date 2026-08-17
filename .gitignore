@@ -38,3 +38,5 @@ kubectl-catalog
 
 # generated helm charts
 charts/
+kustomize/
+!internal/kustomize/
