@@ -140,6 +140,17 @@ func generateValuesYAML(g *ChartGenerator) string {
 		b.WriteString("\n")
 	}
 
+	// Pull secret
+	b.WriteString("# pullSecret creates a Secret of type kubernetes.io/dockerconfigjson.\n")
+	b.WriteString("# Provide the pull secret JSON file at install time:\n")
+	b.WriteString("#   helm install <release> <chart> --set-file pullSecret.dockerConfigJson=/path/to/pull-secret.json\n")
+	b.WriteString("pullSecret:\n")
+	b.WriteString("  create: true\n")
+	b.WriteString("  name: \"redhat-registry-pull-secret\"\n")
+	b.WriteString("  dockerConfigJson: \"\"\n")
+	b.WriteString("  labels: {}\n")
+	b.WriteString("\n")
+
 	// Extra env vars (user-defined)
 	b.WriteString("# env:\n#   LOG_LEVEL: info\n")
 	b.WriteString("env: {}\n\n")

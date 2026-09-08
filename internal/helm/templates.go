@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"sigs.k8s.io/yaml"
 )
 
 type templateFile struct {
@@ -17,26 +16,18 @@ type templateFile struct {
 // deployment YAML by the builder. They are independent of each other
 // and can be reordered freely.
 const (
-	envBlock = `env:
-- name: WATCH_NAMESPACE
-{{- if eq .Values.installMode "AllNamespaces" }}
-  value: ""
-{{- else }}
-  value: {{ .Values.watchNamespace | default .Release.Namespace | quote }}
-{{- end }}
-{{- range $key, $value := .Values.env }}
-- name: {{ $key }}
-  value: {{ $value | quote }}
+	argsBlock = `{{- with .Values.args }}
+args:
+  {{- toYaml . | nindent 12 }}
 {{- end }}`
 
 	envFromBlock = `{{- with .Values.envFrom }}
 envFrom:
-  {{- toYaml . | nindent 10 }}
+  {{- toYaml . | nindent 12 }}
 {{- end }}`
 
-	extraVolumeMountsBlock = `{{- with .Values.extraVolumeMounts }}
-extraVolumeMounts:
-  {{- toYaml . | nindent 10 }}
+	extraVolumeMountsAppendBlock = `{{- with .Values.extraVolumeMounts }}
+{{- toYaml . | nindent 12 }}
 {{- end }}`
 
 	imagePullSecretsBlock = `      {{- with .Values.imagePullSecrets }}
@@ -48,10 +39,9 @@ extraVolumeMounts:
       priorityClassName: {{ . }}
       {{- end }}`
 
-	extraVolumesBlock = `      {{- with .Values.extraVolumes }}
-      extraVolumes:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}`
+	extraVolumesAppendBlock = `{{- with .Values.extraVolumes }}
+{{- toYaml . | nindent 8 }}
+{{- end }}`
 
 	schedulingBlocks = `      {{- with .Values.nodeSelector }}
       nodeSelector:
@@ -71,6 +61,30 @@ extraVolumeMounts:
         {{- toYaml . | nindent 8 }}
       {{- end }}`
 )
+
+func buildEnvBlock(bundleEnvKeys []string) string {
+	excludeKeys := append([]string{"WATCH_NAMESPACE"}, bundleEnvKeys...)
+
+	var b strings.Builder
+	b.WriteString(`- name: WATCH_NAMESPACE
+{{- if eq .Values.installMode "AllNamespaces" }}
+  value: ""
+{{- else }}
+  value: {{ .Values.watchNamespace | default .Release.Namespace | quote }}
+{{- end }}
+{{- range $key, $value := .Values.env }}
+{{- if not (has $key (list`)
+	for _, key := range excludeKeys {
+		_, _ = fmt.Fprintf(&b, " %q", key)
+	}
+	b.WriteString(`)) }}
+- name: {{ $key }}
+  value: {{ $value | quote }}
+{{- end }}
+{{- end }}`)
+
+	return b.String()
+}
 
 func generateTemplates(g *ChartGenerator) ([]templateFile, error) {
 	chartName := sanitizeChartName(g.PackageName)
@@ -110,15 +124,15 @@ func generateTemplates(g *ChartGenerator) ([]templateFile, error) {
 		content := renderWebhookTemplate(chartName, webhooks, namespace)
 		files = append(files, templateFile{Name: "webhook-configs.yaml", Content: content})
 
-		certContent := renderCertManagerTemplate(chartName, g.Manifests.Services, namespace)
+		certContent := renderCertManagerTemplate(chartName, g.Manifests.Services)
 		files = append(files, templateFile{Name: "cert-manager.yaml", Content: certContent})
 
-		selfSignedContent := renderSelfSignedCertTemplate(chartName, g.Manifests.Services, namespace)
+		selfSignedContent := renderSelfSignedCertTemplate(chartName, g.Manifests.Services)
 		files = append(files, templateFile{Name: "self-signed-certs.yaml", Content: selfSignedContent})
 	}
 
 	if len(monitoring) > 0 {
-		content := renderSimpleTemplate(chartName, monitoring, namespace, "monitoring")
+		content := renderMonitoringTemplate(chartName, monitoring, namespace)
 		files = append(files, templateFile{Name: "monitoring.yaml", Content: content})
 	}
 
@@ -127,6 +141,10 @@ func generateTemplates(g *ChartGenerator) ([]templateFile, error) {
 			files = append(files, tf)
 		}
 	}
+
+	// Pull secret for image pull propagation
+	pullSecretContent := renderPullSecretTemplate(chartName)
+	files = append(files, templateFile{Name: "pull-secret.yaml", Content: pullSecretContent})
 
 	return files, nil
 }
@@ -327,6 +345,11 @@ func renderDeploymentTemplate(chartName string, deployments []*unstructured.Unst
 		}
 		tb := newTemplateBuilder(chartName, dep.Object, namespace)
 
+		// Strip runtime-only fields
+		tb.RemoveField([]string{"status"})
+		tb.RemoveField([]string{"metadata", "creationTimestamp"})
+		tb.RemoveField([]string{"spec", "template", "metadata", "creationTimestamp"})
+
 		// Metadata
 		tb.ReplaceNamespace()
 
@@ -354,26 +377,46 @@ func renderDeploymentTemplate(chartName string, deployments []*unstructured.Unst
 		// expression driven by .Values.installMode instead
 		tb.StripHardcodedWatchNamespace()
 
+		// Replace non-image env var values with template expressions that
+		// check .Values.env for overrides, falling back to the bundle default.
+		bundleEnvKeys := tb.TemplateEnvVarOverrides()
+
 		// Per-container field wrapping
 		for ci := range tb.GetContainers() {
 			tb.ReplaceContainerImage(ci, images)
 			tb.WrapContainerField(ci, "resources", ".Values.resources")
 			tb.WrapContainerField(ci, "livenessProbe", ".Values.livenessProbe")
 			tb.WrapContainerField(ci, "readinessProbe", ".Values.readinessProbe")
-			tb.WrapContainerField(ci, "args", ".Values.args")
 			tb.WrapContainerField(ci, "securityContext", ".Values.securityContext")
-			tb.InjectContainerBlock(ci, "env", envBlock)
+
+			// Handle args via inject (not WrapContainerField) to avoid
+			// stealing the YAML list-item marker when args sorts first.
+			tb.RemoveContainerField(ci, "args")
+			tb.InjectContainerBlock(ci, "args", argsBlock)
+
+			// Append dynamic env entries to the existing env list rather
+			// than injecting a second env: key.
+			tb.AppendToContainerEnv(ci, buildEnvBlock(bundleEnvKeys[ci]))
 			tb.InjectContainerBlock(ci, "envfrom", envFromBlock)
-			tb.InjectContainerBlock(ci, "extramounts", extraVolumeMountsBlock)
+
+			// Append extra volume mounts to the existing volumeMounts
+			// list rather than creating an invalid extraVolumeMounts key.
+			tb.AppendToContainerVolumeMounts(ci, extraVolumeMountsAppendBlock)
 		}
 
-		// TLS secret references
+		// Wrap cert/TLS secret volumes and their mounts in a webhooks
+		// conditional — the secret only exists when webhooks are enabled.
+		tb.ConditionalizeSecretVolumes()
+
+		// Replace any remaining TLS secret name references
 		tb.ReplaceTLSSecretRefs()
+
+		// Append extra volumes to the existing volumes list
+		tb.AppendToPodVolumes(extraVolumesAppendBlock)
 
 		// Pod-spec appends (order-independent)
 		tb.AppendToPodSpec(imagePullSecretsBlock)
 		tb.AppendToPodSpec(priorityClassBlock)
-		tb.AppendToPodSpec(extraVolumesBlock)
 		tb.AppendToPodSpec(schedulingBlocks)
 		tb.AppendToPodSpec(topologySpreadBlock)
 
@@ -428,7 +471,10 @@ func renderSimpleTemplate(chartName string, resources []*unstructured.Unstructur
 	var b strings.Builder
 
 	if conditionalField != "" {
-		fmt.Fprintf(&b, "{{- if .Values.%s.enabled }}\n", conditionalField)
+		_, err := fmt.Fprintf(&b, "{{- if .Values.%s.enabled }}\n", conditionalField)
+		if err != nil {
+			return ""
+		}
 	}
 
 	for i, obj := range resources {
@@ -441,6 +487,33 @@ func renderSimpleTemplate(chartName string, resources []*unstructured.Unstructur
 	}
 
 	if conditionalField != "" {
+		b.WriteString("{{- end }}\n")
+	}
+
+	return b.String()
+}
+
+func renderMonitoringTemplate(chartName string, resources []*unstructured.Unstructured, namespace string) string {
+	var b strings.Builder
+
+	for i, obj := range resources {
+		if i > 0 {
+			b.WriteString("---\n")
+		}
+		gvk := obj.GroupVersionKind()
+		apiVersion := gvk.Group + "/" + gvk.Version
+		kind := obj.GetKind()
+
+		_, err := fmt.Fprintf(&b, "{{- if and .Values.monitoring.enabled (.Capabilities.APIVersions.Has \"%s/%s\") }}\n",
+			apiVersion, kind)
+		if err != nil {
+			return ""
+		}
+
+		tb := newTemplateBuilder(chartName, obj.Object, namespace)
+		tb.ReplaceNamespace()
+		b.WriteString(tb.Build())
+
 		b.WriteString("{{- end }}\n")
 	}
 
@@ -520,7 +593,7 @@ func injectCABundleBlock(content, chartName string) string {
 
 // --- Cert-manager and self-signed cert templates (built from scratch, not from objects) ---
 
-func renderCertManagerTemplate(chartName string, services []*unstructured.Unstructured, namespace string) string {
+func renderCertManagerTemplate(chartName string, services []*unstructured.Unstructured) string {
 	var b strings.Builder
 	b.WriteString("{{- if and .Values.certManager.enabled .Values.webhooks.enabled }}\n")
 
@@ -566,7 +639,7 @@ func renderCertManagerTemplate(chartName string, services []*unstructured.Unstru
 	return b.String()
 }
 
-func renderSelfSignedCertTemplate(chartName string, services []*unstructured.Unstructured, namespace string) string {
+func renderSelfSignedCertTemplate(chartName string, services []*unstructured.Unstructured) string {
 	svcName := "webhook-service"
 	if len(services) > 0 {
 		svcName = services[0].GetName()
@@ -611,6 +684,26 @@ func renderSelfSignedCertTemplate(chartName string, services []*unstructured.Uns
 	return b.String()
 }
 
+func renderPullSecretTemplate(chartName string) string {
+	var b strings.Builder
+	b.WriteString("{{- if .Values.pullSecret.create }}\n")
+	b.WriteString("apiVersion: v1\n")
+	b.WriteString("kind: Secret\n")
+	b.WriteString("metadata:\n")
+	fmt.Fprintf(&b, "  name: {{ default (printf \"%%s-pull-secret\" (include \"%s.fullname\" .)) .Values.pullSecret.name }}\n", chartName)
+	b.WriteString("  namespace: {{ .Release.Namespace }}\n")
+	b.WriteString("  labels:\n")
+	fmt.Fprintf(&b, "    {{- include \"%s.labels\" . | nindent 4 }}\n", chartName)
+	b.WriteString("    {{- range $key, $value := .Values.pullSecret.labels }}\n")
+	b.WriteString("    {{ $key }}: {{ $value | quote }}\n")
+	b.WriteString("    {{- end }}\n")
+	b.WriteString("type: kubernetes.io/dockerconfigjson\n")
+	b.WriteString("data:\n")
+	b.WriteString("  .dockerconfigjson: {{ .Values.pullSecret.dockerConfigJson | default \"\" | b64enc | quote }}\n")
+	b.WriteString("{{- end }}\n")
+	return b.String()
+}
+
 // --- Security: escape template delimiters from bundle content ---
 
 func escapeTemplateDelimiters(content string) string {
@@ -633,14 +726,4 @@ func escapeTemplateDelimiters(content string) string {
 		b.WriteByte(content[i])
 	}
 	return b.String()
-}
-
-// --- Helpers for marshaling (used by renderSimpleTemplate and tests) ---
-
-func marshalResource(obj *unstructured.Unstructured) string {
-	data, err := yaml.Marshal(obj.Object)
-	if err != nil {
-		return fmt.Sprintf("# Error marshaling %s/%s: %v\n", obj.GetKind(), obj.GetName(), err)
-	}
-	return escapeTemplateDelimiters(string(data))
 }

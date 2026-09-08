@@ -246,6 +246,189 @@ func TestGenerate_WebhookTemplates(t *testing.T) {
 	}
 }
 
+func TestGenerate_DeploymentTemplate(t *testing.T) {
+	dir := t.TempDir()
+
+	g := &ChartGenerator{
+		PackageName:  "my-operator",
+		Version:      "1.0.0",
+		CertProvider: "self-signed",
+		InstallMode:  "AllNamespaces",
+		Namespace:    "operators",
+		Manifests: &bundle.Manifests{
+			Deployments: []*unstructured.Unstructured{
+				makeDeploymentFull("controller-manager", "quay.io/example/operator:v1.0.0"),
+			},
+		},
+	}
+
+	if err := g.Generate(dir); err != nil {
+		t.Fatalf("Generate() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "templates", "deployment.yaml"))
+	if err != nil {
+		t.Fatalf("reading deployment.yaml: %v", err)
+	}
+	content := string(data)
+
+	t.Run("no status field", func(t *testing.T) {
+		if strings.Contains(content, "status:") {
+			t.Error("deployment template should not contain status field")
+		}
+	})
+
+	t.Run("no duplicate annotations", func(t *testing.T) {
+		count := strings.Count(content, "annotations:")
+		// One for the existing pod template annotation, one from the Helm
+		// conditional — the word "annotations" appears in the conditional
+		// too, but there should be exactly one YAML annotations: key.
+		lines := strings.Split(content, "\n")
+		yamlAnnotations := 0
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "annotations:" {
+				yamlAnnotations++
+			}
+		}
+		if yamlAnnotations > 1 {
+			t.Errorf("expected at most 1 YAML annotations: key in pod template, found %d (total 'annotations:' occurrences: %d)", yamlAnnotations, count)
+		}
+	})
+
+	t.Run("no duplicate env keys", func(t *testing.T) {
+		lines := strings.Split(content, "\n")
+		envKeys := 0
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "env:" {
+				envKeys++
+			}
+		}
+		if envKeys > 1 {
+			t.Errorf("expected exactly 1 env: key per container, found %d", envKeys)
+		}
+	})
+
+	t.Run("args not first in container", func(t *testing.T) {
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "- args:" || strings.HasPrefix(trimmed, "- args: ") {
+				t.Error("args should not be the first field (with list marker) in the container")
+			}
+		}
+	})
+
+	t.Run("containers is a list", func(t *testing.T) {
+		idx := strings.Index(content, "containers:")
+		if idx < 0 {
+			t.Fatal("no containers: found")
+		}
+		after := content[idx:]
+		lines := strings.Split(after, "\n")
+		for _, line := range lines[1:] {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "{{") {
+				continue
+			}
+			if !strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "#") {
+				t.Errorf("first content line after containers: should be a list item (- ...); got %q", trimmed)
+			}
+			break
+		}
+	})
+
+	t.Run("WATCH_NAMESPACE in env list", func(t *testing.T) {
+		if !strings.Contains(content, "WATCH_NAMESPACE") {
+			t.Error("deployment template should contain WATCH_NAMESPACE")
+		}
+	})
+
+	t.Run("env var overrides from values.yaml", func(t *testing.T) {
+		if !strings.Contains(content, `hasKey .Values.env "ENABLE_CONVERSION_WEBHOOK"`) {
+			t.Error("deployment template should check .Values.env for ENABLE_CONVERSION_WEBHOOK override")
+		}
+		if !strings.Contains(content, `hasKey .Values.env "OPERATOR_NAME"`) {
+			t.Error("deployment template should check .Values.env for OPERATOR_NAME override")
+		}
+	})
+
+	t.Run("env range excludes bundle keys", func(t *testing.T) {
+		if !strings.Contains(content, `has $key`) {
+			t.Error("deployment template should filter bundle env keys from .Values.env range")
+		}
+	})
+}
+
+func TestGenerate_MonitoringTemplate(t *testing.T) {
+	dir := t.TempDir()
+
+	g := &ChartGenerator{
+		PackageName: "monitoring-test",
+		Version:     "1.0.0",
+		Namespace:   "default",
+		Manifests: &bundle.Manifests{
+			Other: []*unstructured.Unstructured{
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "monitoring.coreos.com/v1",
+						"kind":       "ServiceMonitor",
+						"metadata":   map[string]interface{}{"name": "my-service-monitor"},
+						"spec": map[string]interface{}{
+							"endpoints": []interface{}{
+								map[string]interface{}{"port": "metrics"},
+							},
+						},
+					},
+				},
+				{
+					Object: map[string]interface{}{
+						"apiVersion": "monitoring.coreos.com/v1",
+						"kind":       "PrometheusRule",
+						"metadata":   map[string]interface{}{"name": "my-prometheus-rule"},
+						"spec":       map[string]interface{}{},
+					},
+				},
+			},
+		},
+	}
+
+	if err := g.Generate(dir); err != nil {
+		t.Fatalf("Generate() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "templates", "monitoring.yaml"))
+	if err != nil {
+		t.Fatalf("reading monitoring.yaml: %v", err)
+	}
+	content := string(data)
+
+	t.Run("capabilities check for ServiceMonitor", func(t *testing.T) {
+		if !strings.Contains(content, `.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor"`) {
+			t.Error("monitoring template should check .Capabilities.APIVersions for ServiceMonitor")
+		}
+	})
+
+	t.Run("capabilities check for PrometheusRule", func(t *testing.T) {
+		if !strings.Contains(content, `.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule"`) {
+			t.Error("monitoring template should check .Capabilities.APIVersions for PrometheusRule")
+		}
+	})
+
+	t.Run("monitoring enabled flag", func(t *testing.T) {
+		if !strings.Contains(content, ".Values.monitoring.enabled") {
+			t.Error("monitoring template should check .Values.monitoring.enabled")
+		}
+	})
+
+	t.Run("uses and conditional", func(t *testing.T) {
+		if !strings.Contains(content, "{{- if and .Values.monitoring.enabled (.Capabilities.APIVersions.Has") {
+			t.Error("monitoring template should combine both conditions with 'and'")
+		}
+	})
+}
+
 // --- Test helpers ---
 
 func makeObj(apiVersion, kind, name string) *unstructured.Unstructured {
@@ -254,6 +437,52 @@ func makeObj(apiVersion, kind, name string) *unstructured.Unstructured {
 			"apiVersion": apiVersion,
 			"kind":       kind,
 			"metadata":   map[string]interface{}{"name": name},
+		},
+	}
+}
+
+func makeDeploymentFull(name, image string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata":   map[string]interface{}{"name": name},
+			"spec": map[string]interface{}{
+				"replicas": int64(1),
+				"template": map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"annotations": map[string]interface{}{
+							"kubectl.kubernetes.io/default-container": "manager",
+						},
+					},
+					"spec": map[string]interface{}{
+						"serviceAccountName": name,
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "manager",
+								"image": image,
+								"args":  []interface{}{"--leader-elect"},
+								"command": []interface{}{"/usr/local/bin/manager"},
+								"env": []interface{}{
+									map[string]interface{}{
+										"name":  "OPERATOR_NAME",
+										"value": "my-operator",
+									},
+									map[string]interface{}{
+										"name":  "ENABLE_CONVERSION_WEBHOOK",
+										"value": "true",
+									},
+									map[string]interface{}{
+										"name":  "WATCH_NAMESPACE",
+										"value": "operators",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			"status": map[string]interface{}{},
 		},
 	}
 }

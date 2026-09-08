@@ -34,7 +34,7 @@ var (
 	generateOutputFormat string
 )
 
-// generateMetadata holds the install context written alongside generated manifests.
+// generateMetadata holds the installation context written alongside generated manifests.
 // It is read back by the apply command to stamp tracking labels/annotations.
 type generateMetadata struct {
 	PackageName  string `json:"packageName"`

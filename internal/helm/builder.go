@@ -3,6 +3,7 @@ package helm
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"sigs.k8s.io/yaml"
@@ -201,6 +202,55 @@ func (b *templateBuilder) TemplateImageEnvVars() {
 	}
 }
 
+// TemplateEnvVarOverrides replaces non-image env var values with Helm template
+// expressions that check .Values.env for an override, falling back to the
+// bundle default. Returns a map from container index to the list of env var
+// names that were templated, so the envBlock range can skip them.
+func (b *templateBuilder) TemplateEnvVarOverrides() map[int][]string {
+	result := make(map[int][]string)
+	for ci, c := range b.GetContainers() {
+		env, ok := c["env"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, e := range env {
+			eMap, ok := e.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name, _ := eMap["name"].(string)
+			if name == "" {
+				continue
+			}
+
+			value, _ := eMap["value"].(string)
+			if strings.HasPrefix(value, "HELMTPL_") {
+				continue
+			}
+			if _, hasValueFrom := eMap["valueFrom"]; hasValueFrom {
+				continue
+			}
+
+			marker := b.nextMarker()
+			eMap["value"] = marker
+
+			tplExpr := fmt.Sprintf(
+				`{{ if hasKey .Values.env %q }}{{ index .Values.env %q | quote }}{{ else }}%s{{ end }}`,
+				name, name, fmt.Sprintf("%q", value),
+			)
+
+			b.replacements = append(b.replacements, markerReplacement{
+				marker:  marker,
+				tplExpr: tplExpr,
+				style:   valueReplace,
+			})
+
+			result[ci] = append(result[ci], name)
+		}
+	}
+	return result
+}
+
 // StripHardcodedWatchNamespace removes any WATCH_NAMESPACE env var that was
 // baked into the deployment by applyInstallMode. The Helm template uses a
 // dynamic expression driven by .Values.installMode instead.
@@ -248,6 +298,227 @@ func (b *templateBuilder) InjectContainerBlock(containerIdx int, fieldSuffix, bl
 		fieldName: field,
 		style:     rawBlockReplace,
 	})
+}
+
+// RemoveContainerField deletes a field from the given container. No-op if missing.
+func (b *templateBuilder) RemoveContainerField(containerIdx int, field string) {
+	containers := b.GetContainers()
+	if containerIdx >= len(containers) {
+		return
+	}
+	delete(containers[containerIdx], field)
+}
+
+// AppendToContainerEnv adds a sentinel entry to the container's env list.
+// After marshaling the sentinel line is replaced with the supplied template
+// block, keeping all entries in a single env: list.
+func (b *templateBuilder) AppendToContainerEnv(containerIdx int, block string) {
+	containers := b.GetContainers()
+	if containerIdx >= len(containers) {
+		return
+	}
+	c := containers[containerIdx]
+
+	env, _ := c["env"].([]interface{})
+	if env == nil {
+		env = []interface{}{}
+	}
+
+	marker := b.nextMarker()
+	env = append(env, map[string]interface{}{"name": marker})
+	c["env"] = env
+
+	b.replacements = append(b.replacements, markerReplacement{
+		marker:    marker,
+		tplExpr:   block,
+		fieldName: "env_append",
+		style:     rawBlockReplace,
+	})
+}
+
+// AppendToContainerVolumeMounts adds a sentinel to the container's
+// volumeMounts list. After marshaling the sentinel is replaced with the
+// supplied template block, appending entries to the existing list.
+func (b *templateBuilder) AppendToContainerVolumeMounts(containerIdx int, block string) {
+	containers := b.GetContainers()
+	if containerIdx >= len(containers) {
+		return
+	}
+	c := containers[containerIdx]
+
+	mounts, _ := c["volumeMounts"].([]interface{})
+	if mounts == nil {
+		mounts = []interface{}{}
+	}
+
+	marker := b.nextMarker()
+	mounts = append(mounts, map[string]interface{}{"mountPath": marker})
+	c["volumeMounts"] = mounts
+
+	b.replacements = append(b.replacements, markerReplacement{
+		marker:    marker,
+		tplExpr:   block,
+		fieldName: "volumemounts_append",
+		style:     rawBlockReplace,
+	})
+}
+
+// AppendToPodVolumes adds a sentinel to the pod-spec volumes list.
+// After marshaling the sentinel is replaced with the supplied template
+// block, appending entries to the existing list.
+func (b *templateBuilder) AppendToPodVolumes(block string) {
+	path := []string{"spec", "template", "spec", "volumes"}
+	volumes, ok := nestedSlice(b.obj, path...)
+	if !ok {
+		volumes = []interface{}{}
+		setNestedField(b.obj, path, volumes)
+	}
+
+	marker := b.nextMarker()
+	volumes = append(volumes, map[string]interface{}{"name": marker})
+	setNestedField(b.obj, path, volumes)
+
+	b.replacements = append(b.replacements, markerReplacement{
+		marker:    marker,
+		tplExpr:   block,
+		fieldName: "volumes_append",
+		style:     rawBlockReplace,
+	})
+}
+
+// ConditionalizeSecretVolumes removes secret-backed volumes whose secret
+// name contains "cert", "tls", or "webhook" (and their matching container
+// volumeMounts), replacing them with blocks conditional on
+// .Values.webhooks.enabled.
+func (b *templateBuilder) ConditionalizeSecretVolumes() {
+	volumes, ok := nestedSlice(b.obj, "spec", "template", "spec", "volumes")
+	if !ok {
+		return
+	}
+
+	templateSecretName := fmt.Sprintf(`{{ include "%s.fullname" . }}-webhook-server-cert`, b.chartName)
+
+	var certVolumeNames []string
+	var remaining []interface{}
+	var volumeBlockParts []string
+
+	for _, v := range volumes {
+		vol, ok := v.(map[string]interface{})
+		if !ok {
+			remaining = append(remaining, v)
+			continue
+		}
+		secret, ok := vol["secret"].(map[string]interface{})
+		if !ok {
+			remaining = append(remaining, v)
+			continue
+		}
+		secretName, _ := secret["secretName"].(string)
+		if secretName == "" {
+			remaining = append(remaining, v)
+			continue
+		}
+		lower := strings.ToLower(secretName)
+		if !(strings.Contains(lower, "cert") || strings.Contains(lower, "tls") || strings.Contains(lower, "webhook")) {
+			remaining = append(remaining, v)
+			continue
+		}
+
+		volName, _ := vol["name"].(string)
+		certVolumeNames = append(certVolumeNames, volName)
+
+		var vb strings.Builder
+		fmt.Fprintf(&vb, "- name: %s\n", volName)
+		vb.WriteString("  secret:\n")
+		fmt.Fprintf(&vb, "    secretName: %s", templateSecretName)
+		if dm, ok := secret["defaultMode"]; ok {
+			fmt.Fprintf(&vb, "\n    defaultMode: %v", dm)
+		}
+		volumeBlockParts = append(volumeBlockParts, vb.String())
+	}
+
+	if len(certVolumeNames) == 0 {
+		return
+	}
+
+	// Add sentinel to the volumes list
+	marker := b.nextMarker()
+	remaining = append(remaining, map[string]interface{}{"name": marker})
+	setNestedField(b.obj, []string{"spec", "template", "spec", "volumes"}, remaining)
+
+	var volBlock strings.Builder
+	volBlock.WriteString("{{- if .Values.webhooks.enabled }}\n")
+	for i, part := range volumeBlockParts {
+		if i > 0 {
+			volBlock.WriteString("\n")
+		}
+		volBlock.WriteString(part)
+	}
+	volBlock.WriteString("\n{{- end }}")
+
+	b.replacements = append(b.replacements, markerReplacement{
+		marker:    marker,
+		tplExpr:   volBlock.String(),
+		fieldName: "volumes_cert",
+		style:     rawBlockReplace,
+	})
+
+	// Remove matching volumeMounts from containers and add conditional sentinels
+	for _, c := range b.GetContainers() {
+		mounts, ok := c["volumeMounts"].([]interface{})
+		if !ok {
+			continue
+		}
+		var remainingMounts []interface{}
+		var mountBlockParts []string
+		for _, m := range mounts {
+			mount, ok := m.(map[string]interface{})
+			if !ok {
+				remainingMounts = append(remainingMounts, m)
+				continue
+			}
+			name, _ := mount["name"].(string)
+			isCert := slices.Contains(certVolumeNames, name)
+			if !isCert {
+				remainingMounts = append(remainingMounts, m)
+				continue
+			}
+
+			var mb strings.Builder
+			mountPath, _ := mount["mountPath"].(string)
+			fmt.Fprintf(&mb, "- mountPath: %s\n", mountPath)
+			fmt.Fprintf(&mb, "  name: %s", name)
+			if readOnly, ok := mount["readOnly"].(bool); ok && readOnly {
+				mb.WriteString("\n  readOnly: true")
+			}
+			mountBlockParts = append(mountBlockParts, mb.String())
+		}
+
+		if len(mountBlockParts) == 0 {
+			continue
+		}
+
+		mountMarker := b.nextMarker()
+		remainingMounts = append(remainingMounts, map[string]interface{}{"mountPath": mountMarker})
+		c["volumeMounts"] = remainingMounts
+
+		var mountBlock strings.Builder
+		mountBlock.WriteString("{{- if .Values.webhooks.enabled }}\n")
+		for i, part := range mountBlockParts {
+			if i > 0 {
+				mountBlock.WriteString("\n")
+			}
+			mountBlock.WriteString(part)
+		}
+		mountBlock.WriteString("\n{{- end }}")
+
+		b.replacements = append(b.replacements, markerReplacement{
+			marker:    mountMarker,
+			tplExpr:   mountBlock.String(),
+			fieldName: "volumemounts_cert",
+			style:     rawBlockReplace,
+		})
+	}
 }
 
 // ReplaceTLSSecretRefs replaces TLS-related secret names in volumes.
@@ -308,14 +579,11 @@ func (b *templateBuilder) ReplaceSubjectSANames() {
 				marker: marker, tplExpr: saExpr, style: valueReplace,
 			})
 		}
-		ns, _ := sMap["namespace"].(string)
-		if ns != "" {
-			marker := b.nextMarker()
-			sMap["namespace"] = marker
-			b.replacements = append(b.replacements, markerReplacement{
-				marker: marker, tplExpr: nsExpr, style: valueReplace,
-			})
-		}
+		marker := b.nextMarker()
+		sMap["namespace"] = marker
+		b.replacements = append(b.replacements, markerReplacement{
+			marker: marker, tplExpr: nsExpr, style: valueReplace,
+		})
 	}
 }
 
@@ -336,6 +604,10 @@ func (b *templateBuilder) Build() string {
 		return fmt.Sprintf("# Error marshaling: %v\n", err)
 	}
 	content := escapeTemplateDelimiters(string(data))
+
+	// Convert compact block sequences to indented style so the output
+	// matches Helm chart conventions (list items indented 2 under the key).
+	content = reindentBlockSequences(content)
 
 	// Replace markers
 	for _, r := range b.replacements {
@@ -394,13 +666,36 @@ func replaceRawBlockMarker(content, marker, fieldName, block string) string {
 	for _, line := range lines {
 		if strings.Contains(line, marker) {
 			indent := len(line) - len(strings.TrimLeft(line, " "))
-			// Re-indent the block to match the marker's position
 			blockLines := strings.Split(block, "\n")
+
+			// Find minimum indentation across YAML content lines so
+			// relative indentation (e.g. "value:" under a list item)
+			// is preserved when re-indenting to the marker position.
+			minIndent := -1
+			for _, bl := range blockLines {
+				trimmed := strings.TrimSpace(bl)
+				if trimmed == "" || strings.HasPrefix(trimmed, "{{") {
+					continue
+				}
+				blIndent := len(bl) - len(strings.TrimLeft(bl, " "))
+				if minIndent < 0 || blIndent < minIndent {
+					minIndent = blIndent
+				}
+			}
+			if minIndent < 0 {
+				minIndent = 0
+			}
+
 			for _, bl := range blockLines {
 				if strings.TrimSpace(bl) == "" {
 					continue
 				}
-				result = append(result, strings.Repeat(" ", indent)+strings.TrimLeft(bl, " "))
+				blIndent := len(bl) - len(strings.TrimLeft(bl, " "))
+				rel := blIndent - minIndent
+				if rel < 0 {
+					rel = 0
+				}
+				result = append(result, strings.Repeat(" ", indent+rel)+strings.TrimLeft(bl, " "))
 			}
 			continue
 		}
@@ -410,27 +705,95 @@ func replaceRawBlockMarker(content, marker, fieldName, block string) string {
 }
 
 func injectLabelsLine(content, chartName string) string {
-	labelLine := fmt.Sprintf("    {{- include \"%s.labels\" . | nindent 4 }}", chartName)
-	if strings.Contains(content, "  labels:") {
-		return strings.Replace(content, "  labels:", fmt.Sprintf("  labels:\n%s", labelLine), 1)
+	lines := strings.Split(content, "\n")
+	var result []string
+	injected := false
+	inMetadata := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+
+		if indent == 0 && trimmed == "metadata:" {
+			inMetadata = true
+		} else if indent == 0 && trimmed != "" && !strings.HasPrefix(trimmed, "{{") {
+			inMetadata = false
+		}
+
+		if !injected && inMetadata && indent == 2 && trimmed == "labels:" {
+			labelLine := fmt.Sprintf("    {{- include \"%s.labels\" . | nindent 4 }}", chartName)
+			result = append(result, line)
+			result = append(result, labelLine)
+			injected = true
+			continue
+		}
+
+		if !injected && inMetadata && indent == 2 && strings.HasPrefix(trimmed, "name:") {
+			labelLine := fmt.Sprintf("    {{- include \"%s.labels\" . | nindent 4 }}", chartName)
+			result = append(result, "  labels:")
+			result = append(result, labelLine)
+			injected = true
+		}
+
+		result = append(result, line)
 	}
-	return strings.Replace(content, "  name:", fmt.Sprintf("  labels:\n%s\n  name:", labelLine), 1)
+
+	return strings.Join(result, "\n")
 }
 
 func injectPodAnnotationsBlock(content string) string {
-	block := `      {{- with .Values.podAnnotations }}
-      annotations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}`
+	mergeInto := "        {{- with .Values.podAnnotations }}\n" +
+		"        {{- toYaml . | nindent 8 }}\n" +
+		"        {{- end }}"
 
-	// Find pod template metadata section (indent 4)
-	if strings.Contains(content, "    metadata:") {
-		return strings.Replace(content, "    metadata:", "    metadata:\n"+block, 1)
+	newBlock := "      {{- with .Values.podAnnotations }}\n" +
+		"      annotations:\n" +
+		"        {{- toYaml . | nindent 8 }}\n" +
+		"      {{- end }}"
+
+	lines := strings.Split(content, "\n")
+	var result []string
+	inPodTemplate := false
+	inPodMeta := false
+	injected := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+
+		if indent == 2 && trimmed == "template:" {
+			inPodTemplate = true
+		}
+
+		if inPodTemplate && indent == 4 && trimmed == "metadata:" {
+			inPodMeta = true
+			result = append(result, line)
+			continue
+		}
+
+		if inPodMeta && !injected && indent <= 4 && trimmed != "" {
+			result = append(result, newBlock)
+			injected = true
+			inPodMeta = false
+		}
+
+		if inPodMeta && !injected && indent == 6 && trimmed == "annotations:" {
+			result = append(result, line)
+			result = append(result, mergeInto)
+			injected = true
+			continue
+		}
+
+		result = append(result, line)
 	}
-	if strings.Contains(content, "    spec:") {
-		return strings.Replace(content, "    spec:", "    metadata:\n"+block+"\n    spec:", 1)
+
+	if !injected {
+		if strings.Contains(content, "    spec:") {
+			return strings.Replace(content, "    spec:", "    metadata:\n"+newBlock+"\n    spec:", 1)
+		}
 	}
-	return content
+
+	return strings.Join(result, "\n")
 }
 
 func replaceNamespaceRecursive(obj map[string]interface{}, namespace string, nextMarker func() string, replacements *[]markerReplacement, nextID *int) {
@@ -525,6 +888,81 @@ func removeNestedField(obj map[string]interface{}, path []string) {
 		}
 		current = next
 	}
+}
+
+// reindentBlockSequences converts compact YAML block sequences (where list
+// items are at the same indent as the parent key) to indented style (items
+// indented +2 under the key), matching Helm chart conventions.
+func reindentBlockSequences(content string) string {
+	lines := strings.Split(content, "\n")
+	n := len(lines)
+	extraIndent := make([]int, n)
+
+	for i := 0; i < n; i++ {
+		trimmed := strings.TrimLeft(lines[i], " ")
+		if !strings.HasPrefix(trimmed, "- ") {
+			continue
+		}
+
+		itemIndent := len(lines[i]) - len(trimmed)
+
+		isCompact := false
+		for j := i - 1; j >= 0; j-- {
+			ptrimmed := strings.TrimSpace(lines[j])
+			if ptrimmed == "" || strings.HasPrefix(ptrimmed, "{{") || strings.HasPrefix(ptrimmed, "#") {
+				continue
+			}
+			pIndent := len(lines[j]) - len(strings.TrimLeft(lines[j], " "))
+			effectiveKeyIndent := pIndent
+			if strings.HasPrefix(strings.TrimLeft(lines[j], " "), "- ") {
+				effectiveKeyIndent = pIndent + 2
+			}
+			if effectiveKeyIndent == itemIndent && strings.HasSuffix(ptrimmed, ":") {
+				isCompact = true
+			}
+			break
+		}
+
+		if !isCompact {
+			continue
+		}
+
+		extraIndent[i] += 2
+
+		for j := i + 1; j < n; j++ {
+			jtrimmed := strings.TrimSpace(lines[j])
+			if jtrimmed == "" {
+				continue
+			}
+			if strings.HasPrefix(jtrimmed, "{{") || strings.HasPrefix(jtrimmed, "#") {
+				jIndent := len(lines[j]) - len(strings.TrimLeft(lines[j], " "))
+				if jIndent >= itemIndent {
+					extraIndent[j] += 2
+				} else {
+					break
+				}
+				continue
+			}
+			jIndent := len(lines[j]) - len(strings.TrimLeft(lines[j], " "))
+			if jIndent < itemIndent {
+				break
+			}
+			if jIndent == itemIndent && !strings.HasPrefix(jtrimmed, "- ") {
+				break
+			}
+			extraIndent[j] += 2
+		}
+	}
+
+	var result []string
+	for i, line := range lines {
+		if extraIndent[i] > 0 && strings.TrimSpace(line) != "" {
+			result = append(result, strings.Repeat(" ", extraIndent[i])+line)
+		} else {
+			result = append(result, line)
+		}
+	}
+	return strings.Join(result, "\n")
 }
 
 func nestedSlice(obj map[string]interface{}, path ...string) ([]interface{}, bool) {
