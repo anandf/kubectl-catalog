@@ -55,7 +55,7 @@ changelog:
   filters:
     exclude:
       - "^docs:"
-      - "^test:"
+      - "^test.json:"
       - "^ci:"
       - "^chore:"
 

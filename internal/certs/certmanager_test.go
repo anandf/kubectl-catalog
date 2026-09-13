@@ -7,7 +7,7 @@ import (
 )
 
 func TestBuildIssuerObject(t *testing.T) {
-	issuer := buildIssuerObject("test-ns", "my-operator")
+	issuer := buildIssuerObject("test.json-ns", "my-operator")
 
 	if issuer.GetKind() != "Issuer" {
 		t.Errorf("Kind = %q, want Issuer", issuer.GetKind())
@@ -15,8 +15,8 @@ func TestBuildIssuerObject(t *testing.T) {
 	if issuer.GetName() != "my-operator-selfsigned-issuer" {
 		t.Errorf("Name = %q, want my-operator-selfsigned-issuer", issuer.GetName())
 	}
-	if issuer.GetNamespace() != "test-ns" {
-		t.Errorf("Namespace = %q, want test-ns", issuer.GetNamespace())
+	if issuer.GetNamespace() != "test.json-ns" {
+		t.Errorf("Namespace = %q, want test.json-ns", issuer.GetNamespace())
 	}
 
 	labels := issuer.GetLabels()
@@ -35,7 +35,7 @@ func TestBuildIssuerObject(t *testing.T) {
 
 func TestBuildCertificateObject(t *testing.T) {
 	p := certProvision{secretName: "my-tls", serviceName: "my-svc"}
-	cert := buildCertificateObject("test-ns", "my-operator", p)
+	cert := buildCertificateObject("test.json-ns", "my-operator", p)
 
 	if cert.GetKind() != "Certificate" {
 		t.Errorf("Kind = %q, want Certificate", cert.GetKind())
@@ -43,8 +43,8 @@ func TestBuildCertificateObject(t *testing.T) {
 	if cert.GetName() != "my-tls-cert" {
 		t.Errorf("Name = %q, want my-tls-cert", cert.GetName())
 	}
-	if cert.GetNamespace() != "test-ns" {
-		t.Errorf("Namespace = %q, want test-ns", cert.GetNamespace())
+	if cert.GetNamespace() != "test.json-ns" {
+		t.Errorf("Namespace = %q, want test.json-ns", cert.GetNamespace())
 	}
 
 	secretName, found, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
@@ -63,9 +63,9 @@ func TestBuildCertificateObject(t *testing.T) {
 	}
 	expectedDNS := []string{
 		"my-svc",
-		"my-svc.test-ns",
-		"my-svc.test-ns.svc",
-		"my-svc.test-ns.svc.cluster.local",
+		"my-svc.test.json-ns",
+		"my-svc.test.json-ns.svc",
+		"my-svc.test.json-ns.svc.cluster.local",
 	}
 	if len(dnsNames) != len(expectedDNS) {
 		t.Fatalf("dnsNames count = %d, want %d", len(dnsNames), len(expectedDNS))
@@ -95,7 +95,7 @@ func TestAnnotateWebhooksForCertManager(t *testing.T) {
 						"clientConfig": map[string]interface{}{
 							"service": map[string]interface{}{
 								"name":      "my-svc",
-								"namespace": "test-ns",
+								"namespace": "test.json-ns",
 							},
 						},
 					},
@@ -113,7 +113,7 @@ func TestAnnotateWebhooksForCertManager(t *testing.T) {
 						"clientConfig": map[string]interface{}{
 							"service": map[string]interface{}{
 								"name":      "other-svc",
-								"namespace": "test-ns",
+								"namespace": "test.json-ns",
 							},
 						},
 					},
@@ -129,10 +129,10 @@ func TestAnnotateWebhooksForCertManager(t *testing.T) {
 		},
 	}
 
-	AnnotateWebhooksForCertManager(resources, "my-svc", "test-ns", "my-tls")
+	AnnotateWebhooksForCertManager(resources, "my-svc", "test.json-ns", "my-tls")
 
 	ann := resources[0].GetAnnotations()
-	expected := "test-ns/my-tls-cert"
+	expected := "test.json-ns/my-tls-cert"
 	if ann[caInjectorAnnotation] != expected {
 		t.Errorf("matching webhook annotation = %q, want %q", ann[caInjectorAnnotation], expected)
 	}
@@ -207,7 +207,7 @@ func TestGenerateCertManagerResources(t *testing.T) {
 						"clientConfig": map[string]interface{}{
 							"service": map[string]interface{}{
 								"name":      "my-svc",
-								"namespace": "test-ns",
+								"namespace": "test.json-ns",
 							},
 						},
 					},
@@ -216,7 +216,7 @@ func TestGenerateCertManagerResources(t *testing.T) {
 		},
 	}
 
-	resources, err := GenerateCertManagerResources("test-ns", "my-operator", services, nil, webhooks)
+	resources, err := GenerateCertManagerResources("test.json-ns", "my-operator", services, nil, webhooks)
 	if err != nil {
 		t.Fatalf("GenerateCertManagerResources() error: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestGenerateCertManagerResources_NoCerts(t *testing.T) {
 		},
 	}
 
-	resources, err := GenerateCertManagerResources("test-ns", "my-op", services, nil, nil)
+	resources, err := GenerateCertManagerResources("test.json-ns", "my-op", services, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

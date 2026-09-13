@@ -808,7 +808,7 @@ func (a *Applier) Preflight(ctx context.Context, manifests *bundle.Manifests, pa
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
 			"metadata": map[string]interface{}{
-				"name":      "kubectl-catalog-preflight-test",
+				"name":      "kubectl-catalog-preflight-test.json",
 				"namespace": a.namespace,
 			},
 			"spec": map[string]interface{}{
@@ -823,7 +823,7 @@ func (a *Applier) Preflight(ctx context.Context, manifests *bundle.Manifests, pa
 					"spec": map[string]interface{}{
 						"containers": []interface{}{
 							map[string]interface{}{
-								"name":  "test",
+								"name":  "test.json",
 								"image": "busybox",
 							},
 						},
@@ -836,7 +836,7 @@ func (a *Applier) Preflight(ctx context.Context, manifests *bundle.Manifests, pa
 	data, marshalErr := testDeploy.MarshalJSON()
 	if marshalErr == nil {
 		_, err = a.dynamicClient.Resource(deployGVR).Namespace(a.namespace).Patch(
-			ctx, "kubectl-catalog-preflight-test", types.ApplyPatchType, data,
+			ctx, "kubectl-catalog-preflight-test.json", types.ApplyPatchType, data,
 			metav1.PatchOptions{FieldManager: fieldManager, DryRun: []string{"All"}},
 		)
 		if err != nil {

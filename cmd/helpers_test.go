@@ -330,7 +330,7 @@ func TestSetSubjectNamespaces_NonBinding(t *testing.T) {
 
 	err := setSubjectNamespaces(dep, "target-ns")
 	require.NoError(t, err)
-	
+
 	// No panic, no changes
 	if dep.GetKind() != "Deployment" {
 		t.Error("unexpected kind change")
@@ -601,7 +601,7 @@ func TestClassifyResource(t *testing.T) {
 				Object: map[string]interface{}{
 					"apiVersion": "v1",
 					"kind":       tt.kind,
-					"metadata":   map[string]interface{}{"name": "test"},
+					"metadata":   map[string]interface{}{"name": "test.json"},
 				},
 			}
 

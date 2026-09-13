@@ -31,7 +31,7 @@ type chartMaintainer struct {
 func generateChartYAML(g *ChartGenerator) ([]byte, error) {
 	chart := chartYAML{
 		APIVersion: "v2",
-		Name:       sanitizeChartName(g.PackageName),
+		Name:       g.chartName(),
 		Type:       "application",
 		Version:    g.Version,
 		AppVersion: g.Version,

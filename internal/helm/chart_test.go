@@ -14,7 +14,7 @@ func TestGenerate_DirectoryStructure(t *testing.T) {
 	dir := t.TempDir()
 
 	g := &ChartGenerator{
-		PackageName:  "test-operator",
+		PackageName:  "test.json-operator",
 		Version:      "1.0.0",
 		Channel:      "stable",
 		CatalogRef:   "registry.example.com/catalog:v4.20",
@@ -37,9 +37,9 @@ func TestGenerate_DirectoryStructure(t *testing.T) {
 			},
 			CSVMetadata: &bundle.CSVMetadata{
 				DisplayName: "Test Operator",
-				Description: "A test operator for unit testing",
+				Description: "A test.json operator for unit testing",
 				Version:     "1.0.0",
-				Keywords:    []string{"test", "operator"},
+				Keywords:    []string{"test.json", "operator"},
 			},
 		},
 	}
@@ -65,6 +65,18 @@ func TestGenerate_DirectoryStructure(t *testing.T) {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			t.Errorf("expected file %s to exist", f)
 		}
+	}
+
+	saData, err := os.ReadFile(filepath.Join(dir, "templates", "serviceaccount.yaml"))
+	if err != nil {
+		t.Fatalf("reading serviceaccount.yaml: %v", err)
+	}
+	saContent := string(saData)
+	if !strings.Contains(saContent, "imagePullSecrets") {
+		t.Error("serviceaccount.yaml should contain imagePullSecrets for pull secret")
+	}
+	if !strings.Contains(saContent, ".Values.pullSecret.create") {
+		t.Error("serviceaccount.yaml imagePullSecrets should be conditional on .Values.pullSecret.create")
 	}
 }
 
@@ -167,7 +179,7 @@ func TestGenerate_CRDsAreRaw(t *testing.T) {
 	dir := t.TempDir()
 
 	g := &ChartGenerator{
-		PackageName: "crd-test",
+		PackageName: "crd-test.json",
 		Version:     "1.0.0",
 		Namespace:   "default",
 		Manifests: &bundle.Manifests{
@@ -199,7 +211,7 @@ func TestGenerate_WebhookTemplates(t *testing.T) {
 	dir := t.TempDir()
 
 	g := &ChartGenerator{
-		PackageName: "webhook-test",
+		PackageName: "webhook-test.json",
 		Version:     "1.0.0",
 		Namespace:   "default",
 		Manifests: &bundle.Manifests{
@@ -365,7 +377,7 @@ func TestGenerate_MonitoringTemplate(t *testing.T) {
 	dir := t.TempDir()
 
 	g := &ChartGenerator{
-		PackageName: "monitoring-test",
+		PackageName: "monitoring-test.json",
 		Version:     "1.0.0",
 		Namespace:   "default",
 		Manifests: &bundle.Manifests{
@@ -429,6 +441,58 @@ func TestGenerate_MonitoringTemplate(t *testing.T) {
 	})
 }
 
+func TestGenerate_ChartNameOverride(t *testing.T) {
+	dir := t.TempDir()
+
+	g := &ChartGenerator{
+		PackageName: "some-operator",
+		ChartName:   "my-custom-chart",
+		Version:     "1.0.0",
+		Namespace:   "default",
+		Manifests: &bundle.Manifests{
+			Deployments: []*unstructured.Unstructured{
+				makeDeployment("controller-manager", "quay.io/example/operator:v1.0.0"),
+			},
+		},
+	}
+
+	if err := g.Generate(dir); err != nil {
+		t.Fatalf("Generate() error: %v", err)
+	}
+
+	chartData, err := os.ReadFile(filepath.Join(dir, "Chart.yaml"))
+	if err != nil {
+		t.Fatalf("reading Chart.yaml: %v", err)
+	}
+	if !strings.Contains(string(chartData), "name: my-custom-chart") {
+		t.Errorf("Chart.yaml should use overridden name 'my-custom-chart', got:\n%s", string(chartData))
+	}
+
+	valuesData, err := os.ReadFile(filepath.Join(dir, "values.yaml"))
+	if err != nil {
+		t.Fatalf("reading values.yaml: %v", err)
+	}
+	if !strings.Contains(string(valuesData), "# Default values for my-custom-chart.") {
+		t.Error("values.yaml should reference the overridden chart name")
+	}
+
+	helpersData, err := os.ReadFile(filepath.Join(dir, "templates", "_helpers.tpl"))
+	if err != nil {
+		t.Fatalf("reading _helpers.tpl: %v", err)
+	}
+	if !strings.Contains(string(helpersData), "my-custom-chart") {
+		t.Error("_helpers.tpl should reference the overridden chart name")
+	}
+
+	deployData, err := os.ReadFile(filepath.Join(dir, "templates", "deployment.yaml"))
+	if err != nil {
+		t.Fatalf("reading deployment.yaml: %v", err)
+	}
+	if !strings.Contains(string(deployData), "my-custom-chart") {
+		t.Error("deployment template should reference the overridden chart name in labels/helpers")
+	}
+}
+
 // --- Test helpers ---
 
 func makeObj(apiVersion, kind, name string) *unstructured.Unstructured {
@@ -459,9 +523,9 @@ func makeDeploymentFull(name, image string) *unstructured.Unstructured {
 						"serviceAccountName": name,
 						"containers": []interface{}{
 							map[string]interface{}{
-								"name":  "manager",
-								"image": image,
-								"args":  []interface{}{"--leader-elect"},
+								"name":    "manager",
+								"image":   image,
+								"args":    []interface{}{"--leader-elect"},
 								"command": []interface{}{"/usr/local/bin/manager"},
 								"env": []interface{}{
 									map[string]interface{}{

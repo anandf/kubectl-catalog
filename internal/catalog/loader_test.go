@@ -9,14 +9,14 @@ import (
 
 func TestLoadFromDirectoryJSON(t *testing.T) {
 	dir := t.TempDir()
-	configsDir := filepath.Join(dir, "configs", "test-operator")
+	configsDir := filepath.Join(dir, "configs", "test.json-operator")
 	if err := os.MkdirAll(configsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	content := `{"schema":"olm.package","name":"test-operator","defaultChannel":"stable"}
-{"schema":"olm.channel","name":"stable","package":"test-operator","entries":[{"name":"test-operator.v1.0.0"}]}
-{"schema":"olm.bundle","name":"test-operator.v1.0.0","package":"test-operator","image":"img:v1","properties":[{"type":"olm.package","value":{"version":"1.0.0"}}]}
+	content := `{"schema":"olm.package","name":"test.json-operator","defaultChannel":"stable"}
+{"schema":"olm.channel","name":"stable","package":"test.json-operator","entries":[{"name":"test.json-operator.v1.0.0"}]}
+{"schema":"olm.bundle","name":"test.json-operator.v1.0.0","package":"test.json-operator","image":"img:v1","properties":[{"type":"olm.package","value":{"version":"1.0.0"}}]}
 `
 	if err := os.WriteFile(filepath.Join(configsDir, "catalog.json"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -30,8 +30,8 @@ func TestLoadFromDirectoryJSON(t *testing.T) {
 	if len(fbc.Packages) != 1 {
 		t.Errorf("expected 1 package, got %d", len(fbc.Packages))
 	}
-	if fbc.Packages[0].Name != "test-operator" {
-		t.Errorf("expected package name test-operator, got %s", fbc.Packages[0].Name)
+	if fbc.Packages[0].Name != "test.json-operator" {
+		t.Errorf("expected package name test.json-operator, got %s", fbc.Packages[0].Name)
 	}
 	if fbc.Packages[0].DefaultChannel != "stable" {
 		t.Errorf("expected default channel stable, got %s", fbc.Packages[0].DefaultChannel)

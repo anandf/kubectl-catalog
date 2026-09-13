@@ -9,7 +9,7 @@ import (
 func TestTarDirectory(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create test files
+	// Create test.json files
 	if err := os.WriteFile(filepath.Join(dir, "file1.yaml"), []byte("content1"), 0o644); err != nil {
 		t.Fatalf("writing file1.yaml: %v", err)
 	}

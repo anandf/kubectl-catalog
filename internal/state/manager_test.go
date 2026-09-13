@@ -16,11 +16,11 @@ func makeResource(kind, name, version, channel string) unstructured.Unstructured
 				"annotations": map[string]interface{}{
 					AnnVersion: version,
 					AnnChannel: channel,
-					AnnBundle:  "test-bundle",
+					AnnBundle:  "test.json-bundle",
 				},
 				"labels": map[string]interface{}{
 					LabelManagedBy: ManagedByValue,
-					LabelPackage:   "test-pkg",
+					LabelPackage:   "test.json-pkg",
 				},
 			},
 		},

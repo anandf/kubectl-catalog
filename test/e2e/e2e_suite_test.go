@@ -37,7 +37,7 @@ func TestE2E(t *testing.T) {
 var _ = SynchronizedBeforeSuite(func() []byte {
 	var err error
 
-	// Determine project root (two levels up from test/e2e)
+	// Determine project root (two levels up from test.json/e2e)
 	projectRoot, err = filepath.Abs(filepath.Join("..", ".."))
 	Expect(err).NotTo(HaveOccurred())
 
@@ -57,7 +57,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 		gitCommit = strings.TrimSpace(string(commitBytes))
 	}
 
-	ldflags := fmt.Sprintf("-X github.com/anandf/kubectl-catalog/cmd.version=%s -X github.com/anandf/kubectl-catalog/cmd.gitCommit=%s -X github.com/anandf/kubectl-catalog/cmd.buildDate=e2e-test",
+	ldflags := fmt.Sprintf("-X github.com/anandf/kubectl-catalog/cmd.version=%s -X github.com/anandf/kubectl-catalog/cmd.gitCommit=%s -X github.com/anandf/kubectl-catalog/cmd.buildDate=e2e-test.json",
 		version, gitCommit)
 	cmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", binaryPath, ".")
 	cmd.Dir = projectRoot

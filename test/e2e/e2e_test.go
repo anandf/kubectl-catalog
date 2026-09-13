@@ -15,7 +15,7 @@ import (
 // (--catalog-type community --ocp-version 4.20) which is publicly accessible
 // without a pull secret. Operator bundle images are hosted on quay.io.
 //
-// The test operator is argocd-operator, chosen because:
+// The test.json operator is argocd-operator, chosen because:
 //   - It is available in the community catalog
 //   - Its bundle images are on quay.io (no auth required)
 //   - It supports multiple install modes and channels
@@ -236,7 +236,7 @@ var _ = Describe("kubectl-catalog E2E", func() {
 		})
 
 		It("should push generated manifests to a local OCI registry", func() {
-			ociRef := fmt.Sprintf("oci://%s/e2e-test/%s:v1.0.0", registryURL, testOperator)
+			ociRef := fmt.Sprintf("oci://%s/e2e-test.json/%s:v1.0.0", registryURL, testOperator)
 			args := append([]string{"generate", testOperator, "-o", ociRef}, catalogFlags()...)
 			stdout, stderr, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred(), "generate+push failed: %s\n%s", stdout, stderr)
@@ -247,7 +247,7 @@ var _ = Describe("kubectl-catalog E2E", func() {
 
 		It("should push with auto-generated tag from channel", func() {
 			// No tag specified — should auto-derive from the channel name
-			ociRef := fmt.Sprintf("oci://%s/e2e-test/%s-autotag", registryURL, testOperator)
+			ociRef := fmt.Sprintf("oci://%s/e2e-test.json/%s-autotag", registryURL, testOperator)
 			args := append([]string{"generate", testOperator, "-o", ociRef}, catalogFlags()...)
 			stdout, stderr, err := runBinary(args...)
 			Expect(err).NotTo(HaveOccurred(), "generate+push failed: %s\n%s", stdout, stderr)
@@ -449,7 +449,7 @@ var _ = Describe("kubectl-catalog E2E", func() {
 
 	Describe("error handling and hints", func() {
 		It("should require --ocp-version for redhat catalog type with a hint", func() {
-			_, stderr, err := runBinary("search", "test", "--catalog-type", "redhat")
+			_, stderr, err := runBinary("search", "test.json", "--catalog-type", "redhat")
 			Expect(err).To(HaveOccurred())
 			Expect(stderr).To(ContainSubstring("--ocp-version"))
 		})

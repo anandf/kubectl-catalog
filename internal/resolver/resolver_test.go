@@ -18,18 +18,18 @@ func mustMarshal(v interface{}) json.RawMessage {
 func newTestFBC() *catalog.FBC {
 	return &catalog.FBC{
 		Packages: []catalog.Package{
-			{Schema: "olm.package", Name: "test-operator", DefaultChannel: "stable"},
+			{Schema: "olm.package", Name: "test.json-operator", DefaultChannel: "stable"},
 			{Schema: "olm.package", Name: "dep-operator", DefaultChannel: "stable"},
 		},
 		Channels: []catalog.Channel{
 			{
 				Schema:  "olm.channel",
 				Name:    "stable",
-				Package: "test-operator",
+				Package: "test.json-operator",
 				Entries: []catalog.ChannelEntry{
-					{Name: "test-operator.v1.0.0"},
-					{Name: "test-operator.v1.1.0", Replaces: "test-operator.v1.0.0"},
-					{Name: "test-operator.v2.0.0", Replaces: "test-operator.v1.1.0"},
+					{Name: "test.json-operator.v1.0.0"},
+					{Name: "test.json-operator.v1.1.0", Replaces: "test.json-operator.v1.0.0"},
+					{Name: "test.json-operator.v2.0.0", Replaces: "test.json-operator.v1.1.0"},
 				},
 			},
 			{
@@ -43,24 +43,24 @@ func newTestFBC() *catalog.FBC {
 		},
 		Bundles: []catalog.Bundle{
 			{
-				Schema: "olm.bundle", Name: "test-operator.v1.0.0", Package: "test-operator",
-				Image: "registry.example.com/test-operator:v1.0.0",
+				Schema: "olm.bundle", Name: "test.json-operator.v1.0.0", Package: "test.json-operator",
+				Image: "registry.example.com/test.json-operator:v1.0.0",
 				Properties: []catalog.Property{
-					{Type: "olm.package", Value: mustMarshal(map[string]string{"packageName": "test-operator", "version": "1.0.0"})},
+					{Type: "olm.package", Value: mustMarshal(map[string]string{"packageName": "test.json-operator", "version": "1.0.0"})},
 				},
 			},
 			{
-				Schema: "olm.bundle", Name: "test-operator.v1.1.0", Package: "test-operator",
-				Image: "registry.example.com/test-operator:v1.1.0",
+				Schema: "olm.bundle", Name: "test.json-operator.v1.1.0", Package: "test.json-operator",
+				Image: "registry.example.com/test.json-operator:v1.1.0",
 				Properties: []catalog.Property{
-					{Type: "olm.package", Value: mustMarshal(map[string]string{"packageName": "test-operator", "version": "1.1.0"})},
+					{Type: "olm.package", Value: mustMarshal(map[string]string{"packageName": "test.json-operator", "version": "1.1.0"})},
 				},
 			},
 			{
-				Schema: "olm.bundle", Name: "test-operator.v2.0.0", Package: "test-operator",
-				Image: "registry.example.com/test-operator:v2.0.0",
+				Schema: "olm.bundle", Name: "test.json-operator.v2.0.0", Package: "test.json-operator",
+				Image: "registry.example.com/test.json-operator:v2.0.0",
 				Properties: []catalog.Property{
-					{Type: "olm.package", Value: mustMarshal(map[string]string{"packageName": "test-operator", "version": "2.0.0"})},
+					{Type: "olm.package", Value: mustMarshal(map[string]string{"packageName": "test.json-operator", "version": "2.0.0"})},
 				},
 			},
 			{
@@ -78,7 +78,7 @@ func TestResolveChannelHead(t *testing.T) {
 	fbc := newTestFBC()
 	r := New(fbc)
 
-	plan, err := r.Resolve("test-operator", "stable", "")
+	plan, err := r.Resolve("test.json-operator", "stable", "")
 	if err != nil {
 		t.Fatalf("Resolve() error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestResolveExactVersion(t *testing.T) {
 	fbc := newTestFBC()
 	r := New(fbc)
 
-	plan, err := r.Resolve("test-operator", "stable", "1.1.0")
+	plan, err := r.Resolve("test.json-operator", "stable", "1.1.0")
 	if err != nil {
 		t.Fatalf("Resolve() error: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestResolveDefaultChannel(t *testing.T) {
 	fbc := newTestFBC()
 	r := New(fbc)
 
-	plan, err := r.Resolve("test-operator", "", "")
+	plan, err := r.Resolve("test.json-operator", "", "")
 	if err != nil {
 		t.Fatalf("Resolve() error: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestResolveVersionNotFound(t *testing.T) {
 	fbc := newTestFBC()
 	r := New(fbc)
 
-	_, err := r.Resolve("test-operator", "stable", "9.9.9")
+	_, err := r.Resolve("test.json-operator", "stable", "9.9.9")
 	if err == nil {
 		t.Fatal("expected error for nonexistent version")
 	}
@@ -143,7 +143,7 @@ func TestResolveUpgrade(t *testing.T) {
 	fbc := newTestFBC()
 	r := New(fbc)
 
-	plan, err := r.ResolveUpgrade("test-operator", "stable", "1.0.0")
+	plan, err := r.ResolveUpgrade("test.json-operator", "stable", "1.0.0")
 	if err != nil {
 		t.Fatalf("ResolveUpgrade() error: %v", err)
 	}
@@ -158,8 +158,8 @@ func TestResolveUpgrade(t *testing.T) {
 	}
 
 	last := plan.Bundles[len(plan.Bundles)-1]
-	if last.Name != "test-operator.v2.0.0" {
-		t.Errorf("expected last bundle to be test-operator.v2.0.0, got %s", last.Name)
+	if last.Name != "test.json-operator.v2.0.0" {
+		t.Errorf("expected last bundle to be test.json-operator.v2.0.0, got %s", last.Name)
 	}
 }
 
@@ -167,7 +167,7 @@ func TestResolveUpgradeAlreadyAtHead(t *testing.T) {
 	fbc := newTestFBC()
 	r := New(fbc)
 
-	_, err := r.ResolveUpgrade("test-operator", "stable", "2.0.0")
+	_, err := r.ResolveUpgrade("test.json-operator", "stable", "2.0.0")
 	if err == nil {
 		t.Fatal("expected error when already at head")
 	}
@@ -215,14 +215,14 @@ func TestResolveWithSkips(t *testing.T) {
 
 func TestResolveWithPackageDependency(t *testing.T) {
 	fbc := newTestFBC()
-	// Add a dependency from test-operator.v1.0.0 to dep-operator
+	// Add a dependency from test.json-operator.v1.0.0 to dep-operator
 	fbc.Bundles[0].Properties = append(fbc.Bundles[0].Properties, catalog.Property{
 		Type:  "olm.package.required",
 		Value: mustMarshal(map[string]string{"packageName": "dep-operator", "versionRange": ">=0.5.0"}),
 	})
 
 	r := New(fbc)
-	plan, err := r.Resolve("test-operator", "stable", "1.0.0")
+	plan, err := r.Resolve("test.json-operator", "stable", "1.0.0")
 	if err != nil {
 		t.Fatalf("Resolve() error: %v", err)
 	}
@@ -235,8 +235,8 @@ func TestResolveWithPackageDependency(t *testing.T) {
 	if plan.Bundles[0].Package != "dep-operator" {
 		t.Errorf("expected first bundle to be dep-operator, got %s", plan.Bundles[0].Package)
 	}
-	if plan.Bundles[1].Package != "test-operator" {
-		t.Errorf("expected second bundle to be test-operator, got %s", plan.Bundles[1].Package)
+	if plan.Bundles[1].Package != "test.json-operator" {
+		t.Errorf("expected second bundle to be test.json-operator, got %s", plan.Bundles[1].Package)
 	}
 }
 

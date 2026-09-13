@@ -12,14 +12,15 @@ import (
 )
 
 type KustomizeGenerator struct {
-	PackageName  string
-	Version      string
-	Channel      string
-	CatalogRef   string
-	Manifests    *bundle.Manifests
-	CertProvider string
-	InstallMode  string
-	Namespace    string
+	PackageName      string
+	Version          string
+	Channel          string
+	CatalogRef       string
+	Manifests        *bundle.Manifests
+	CertProvider     string
+	InstallMode      string
+	Namespace        string
+	PullSecretLabels map[string]string
 }
 
 func (g *KustomizeGenerator) Generate(outputDir string) error {
@@ -82,6 +83,16 @@ func (g *KustomizeGenerator) Generate(outputDir string) error {
 		return nil
 	}
 
+	// 3. Generate pull secret and wire it into ServiceAccounts
+	pullSecretName := strings.ToLower(strings.ReplaceAll(g.PackageName, "_", "-")) + "-pull-secret"
+	pullSecretContent := generatePullSecret(pullSecretName, g.Namespace, g.PullSecretLabels)
+	if err := os.WriteFile(filepath.Join(baseDir, "pull-secret.yaml"), []byte(pullSecretContent), 0o644); err != nil {
+		return fmt.Errorf("writing pull-secret.yaml: %w", err)
+	}
+	resourceFiles = append(resourceFiles, "pull-secret.yaml")
+
+	injectImagePullSecrets(g.Manifests.RBAC, pullSecretName)
+
 	if err := writeResources(g.Manifests.RBAC); err != nil {
 		return err
 	}
@@ -95,20 +106,20 @@ func (g *KustomizeGenerator) Generate(outputDir string) error {
 		return err
 	}
 
-	// 3. Generate base/kustomization.yaml
+	// 4. Generate base/kustomization.yaml
 	allFiles := append(crdFiles, resourceFiles...)
 	baseKustomization := generateBaseKustomization(g.PackageName, allFiles)
 	if err := os.WriteFile(filepath.Join(baseDir, "kustomization.yaml"), []byte(baseKustomization), 0o644); err != nil {
 		return fmt.Errorf("writing base kustomization.yaml: %w", err)
 	}
 
-	// 4. Generate overlays/default/kustomization.yaml
-	overlayKustomization := generateOverlayKustomization(g)
+	// 5. Generate overlays/default/kustomization.yaml
+	overlayKustomization := generateOverlayKustomization(g, pullSecretName)
 	if err := os.WriteFile(filepath.Join(overlayDir, "kustomization.yaml"), []byte(overlayKustomization), 0o644); err != nil {
 		return fmt.Errorf("writing overlay kustomization.yaml: %w", err)
 	}
 
-	// 5. Generate overlays/default/resources.yaml (commented-out merge patch)
+	// 6. Generate overlays/default/resources.yaml (commented-out merge patch)
 	resourcesPatch := generateResourcePatch(g)
 	if resourcesPatch != "" {
 		if err := os.WriteFile(filepath.Join(overlayDir, "resources.yaml"), []byte(resourcesPatch), 0o644); err != nil {
@@ -195,7 +206,7 @@ func generateBaseKustomization(packageName string, resources []string) string {
 	return b.String()
 }
 
-func generateOverlayKustomization(g *KustomizeGenerator) string {
+func generateOverlayKustomization(g *KustomizeGenerator, pullSecretName string) string {
 	var b strings.Builder
 	b.WriteString("apiVersion: kustomize.config.k8s.io/v1beta1\n")
 	b.WriteString("kind: Kustomization\n\n")
@@ -232,6 +243,27 @@ func generateOverlayKustomization(g *KustomizeGenerator) string {
 		b.WriteString(fmt.Sprintf("    count: %d\n", replicas))
 		b.WriteString("\n")
 	}
+
+	// Pull secret — generate with secretGenerator so users provide
+	// the actual .dockerconfigjson file at deploy time.
+	b.WriteString("# To supply a pull secret for private registries, create a\n")
+	b.WriteString("# .dockerconfigjson file and uncomment the secretGenerator below.\n")
+	b.WriteString("# This replaces the placeholder pull-secret.yaml from the base.\n")
+	b.WriteString("#\n")
+	b.WriteString("# secretGenerator:\n")
+	b.WriteString(fmt.Sprintf("#   - name: %s\n", pullSecretName))
+	b.WriteString("#     type: kubernetes.io/dockerconfigjson\n")
+	b.WriteString("#     files:\n")
+	b.WriteString("#       - .dockerconfigjson=pull-secret.json\n")
+	b.WriteString("#     behavior: replace\n")
+	if len(g.PullSecretLabels) > 0 {
+		b.WriteString("#     options:\n")
+		b.WriteString("#       labels:\n")
+		for k, v := range g.PullSecretLabels {
+			b.WriteString(fmt.Sprintf("#         %s: %q\n", k, v))
+		}
+	}
+	b.WriteString("\n")
 
 	// Patches reference (only if we have deployments)
 	if len(g.Manifests.Deployments) > 0 {
@@ -290,6 +322,39 @@ func splitImageRef(ref string) (string, string) {
 		}
 	}
 	return ref, "latest"
+}
+
+func generatePullSecret(name, namespace string, labels map[string]string) string {
+	var b strings.Builder
+	b.WriteString("apiVersion: v1\n")
+	b.WriteString("kind: Secret\n")
+	b.WriteString("metadata:\n")
+	b.WriteString(fmt.Sprintf("  name: %s\n", name))
+	if namespace != "" {
+		b.WriteString(fmt.Sprintf("  namespace: %s\n", namespace))
+	}
+	if len(labels) > 0 {
+		b.WriteString("  labels:\n")
+		for k, v := range labels {
+			b.WriteString(fmt.Sprintf("    %s: %q\n", k, v))
+		}
+	}
+	b.WriteString("type: kubernetes.io/dockerconfigjson\n")
+	b.WriteString("data:\n")
+	b.WriteString("  .dockerconfigjson: e30=\n")
+	return b.String()
+}
+
+func injectImagePullSecrets(rbac []*unstructured.Unstructured, pullSecretName string) {
+	for _, obj := range rbac {
+		if obj.GetKind() != "ServiceAccount" {
+			continue
+		}
+		existing, _, _ := unstructured.NestedSlice(obj.Object, "imagePullSecrets")
+		entry := map[string]interface{}{"name": pullSecretName}
+		existing = append(existing, entry)
+		_ = unstructured.SetNestedSlice(obj.Object, existing, "imagePullSecrets")
+	}
 }
 
 func generateResourcePatch(g *KustomizeGenerator) string {

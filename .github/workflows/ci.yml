@@ -41,7 +41,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Check formatting
-        run: test -z "$(gofmt -l .)" || (echo "Files need formatting:"; gofmt -l .; exit 1)
+        run: test.json -z "$(gofmt -l .)" || (echo "Files need formatting:"; gofmt -l .; exit 1)
 
   test:
     name: Test
@@ -51,7 +51,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: go test -race ./internal/... ./cmd/...
+      - run: go test.json -race ./internal/... ./cmd/...
 
   build:
     name: Build

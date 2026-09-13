@@ -28,15 +28,15 @@ func TestCatalogSourceName_CustomImage(t *testing.T) {
 }
 
 func TestCatalogSourceName_Deterministic(t *testing.T) {
-	a := CatalogSourceName("", "quay.io/test:v1")
-	b := CatalogSourceName("", "quay.io/test:v1")
+	a := CatalogSourceName("", "quay.io/test.json:v1")
+	b := CatalogSourceName("", "quay.io/test.json:v1")
 	if a != b {
 		t.Errorf("CatalogSourceName should be deterministic: %q != %q", a, b)
 	}
 }
 
 func TestNewCatalogSource(t *testing.T) {
-	cs := NewCatalogSource("test-cs", "default", "quay.io/test:v1", "Test Catalog", "")
+	cs := NewCatalogSource("test.json-cs", "default", "quay.io/test.json:v1", "Test Catalog", "")
 
 	if cs.GetKind() != "CatalogSource" {
 		t.Errorf("expected kind CatalogSource, got %q", cs.GetKind())
@@ -44,12 +44,12 @@ func TestNewCatalogSource(t *testing.T) {
 	if cs.GetAPIVersion() != "operators.coreos.com/v1alpha1" {
 		t.Errorf("unexpected apiVersion: %q", cs.GetAPIVersion())
 	}
-	if cs.GetName() != "test-cs" {
+	if cs.GetName() != "test.json-cs" {
 		t.Errorf("unexpected name: %q", cs.GetName())
 	}
 
 	image, _, _ := unstructured.NestedString(cs.Object, "spec", "image")
-	if image != "quay.io/test:v1" {
+	if image != "quay.io/test.json:v1" {
 		t.Errorf("unexpected spec.image: %q", image)
 	}
 
@@ -66,7 +66,7 @@ func TestNewCatalogSource(t *testing.T) {
 }
 
 func TestNewCatalogSource_WithPullSecret(t *testing.T) {
-	cs := NewCatalogSource("test-cs", "default", "quay.io/test:v1", "Test", "my-secret")
+	cs := NewCatalogSource("test.json-cs", "default", "quay.io/test.json:v1", "Test", "my-secret")
 
 	secrets, found, _ := unstructured.NestedSlice(cs.Object, "spec", "secrets")
 	if !found || len(secrets) != 1 {
@@ -78,7 +78,7 @@ func TestNewCatalogSource_WithPullSecret(t *testing.T) {
 }
 
 func TestNewOperatorGroup_AllNamespaces(t *testing.T) {
-	og := NewOperatorGroup("test-og", "default", nil)
+	og := NewOperatorGroup("test.json-og", "default", nil)
 
 	if og.GetKind() != "OperatorGroup" {
 		t.Errorf("expected kind OperatorGroup, got %q", og.GetKind())
@@ -94,7 +94,7 @@ func TestNewOperatorGroup_AllNamespaces(t *testing.T) {
 }
 
 func TestNewOperatorGroup_SingleNamespace(t *testing.T) {
-	og := NewOperatorGroup("test-og", "my-ns", []string{"my-ns"})
+	og := NewOperatorGroup("test.json-og", "my-ns", []string{"my-ns"})
 
 	targets, found, _ := unstructured.NestedSlice(og.Object, "spec", "targetNamespaces")
 	if !found || len(targets) != 1 {

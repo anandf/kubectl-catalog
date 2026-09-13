@@ -12,7 +12,7 @@ import (
 )
 
 func TestKustomizeGenerate(t *testing.T) {
-	dir := "/tmp/kustomize-test"
+	dir := "/tmp/kustomize-test.json"
 	os.RemoveAll(dir)
 
 	g := &kustomizegen.KustomizeGenerator{
@@ -68,7 +68,9 @@ func TestKustomizeGenerate(t *testing.T) {
 
 	// Walk and print all files
 	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() { return nil }
+		if err != nil || info.IsDir() {
+			return nil
+		}
 		rel, _ := filepath.Rel(dir, path)
 		data, _ := os.ReadFile(path)
 		fmt.Printf("\n=== %s ===\n%s\n", rel, string(data))

@@ -167,7 +167,7 @@ func TestSetWatchNamespace_NoExistingEnv(t *testing.T) {
 	})
 
 	m := &Manifests{Deployments: []*unstructured.Unstructured{dep}}
-	err := m.SetWatchNamespace("test-ns")
+	err := m.SetWatchNamespace("test.json-ns")
 	if err != nil {
 		require.NoError(t, err)
 	}
@@ -176,8 +176,8 @@ func TestSetWatchNamespace_NoExistingEnv(t *testing.T) {
 		t.Fatalf("env length = %d, want 1", len(env))
 	}
 	eMap := env[0].(map[string]interface{})
-	if eMap["name"] != "WATCH_NAMESPACE" || eMap["value"] != "test-ns" {
-		t.Errorf("expected WATCH_NAMESPACE=test-ns, got %v", eMap)
+	if eMap["name"] != "WATCH_NAMESPACE" || eMap["value"] != "test.json-ns" {
+		t.Errorf("expected WATCH_NAMESPACE=test.json-ns, got %v", eMap)
 	}
 }
 

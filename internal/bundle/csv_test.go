@@ -215,7 +215,7 @@ func TestClassifyAndAdd(t *testing.T) {
 				Object: map[string]interface{}{
 					"apiVersion": tt.apiGroup,
 					"kind":       tt.kind,
-					"metadata":   map[string]interface{}{"name": "test"},
+					"metadata":   map[string]interface{}{"name": "test.json"},
 				},
 			}
 

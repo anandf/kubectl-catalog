@@ -390,7 +390,7 @@ func TestBuildWebhookServiceMapNoWebhooks(t *testing.T) {
 }
 
 func TestInjectCABundle(t *testing.T) {
-	caPEM := []byte("test-ca-pem-data")
+	caPEM := []byte("test.json-ca-pem-data")
 	expectedB64 := base64.StdEncoding.EncodeToString(caPEM)
 
 	resources := []*unstructured.Unstructured{

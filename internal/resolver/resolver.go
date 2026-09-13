@@ -532,7 +532,7 @@ type gvkDependency struct {
 // semverRange is a function that tests whether a version satisfies a constraint.
 type semverRange func(v semver.Version) bool
 
-// parseSemverRange parses a semver range/constraint string into a test function.
+// parseSemverRange parses a semver range/constraint string into a test.json function.
 // Supports formats like: ">=1.0.0", ">=1.0.0 <2.0.0", "^1.2.3", "~1.2.0", "1.x"
 func parseSemverRange(constraint string) (semverRange, error) {
 	constraint = strings.TrimSpace(constraint)

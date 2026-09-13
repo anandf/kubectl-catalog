@@ -135,9 +135,9 @@ func TestPullSecretName(t *testing.T) {
 }
 
 func TestNamespaceAndSetNamespace(t *testing.T) {
-	a := newTestApplier("test-ns")
-	if a.Namespace() != "test-ns" {
-		t.Fatalf("Namespace() = %q, want %q", a.Namespace(), "test-ns")
+	a := newTestApplier("test.json-ns")
+	if a.Namespace() != "test.json-ns" {
+		t.Fatalf("Namespace() = %q, want %q", a.Namespace(), "test.json-ns")
 	}
 	a.SetNamespace("other-ns")
 	if a.Namespace() != "other-ns" {
@@ -187,7 +187,7 @@ func TestStampMetadata(t *testing.T) {
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
 			"metadata": map[string]interface{}{
-				"name": "test",
+				"name": "test.json",
 				"labels": map[string]interface{}{
 					"existing": "label",
 				},
@@ -195,7 +195,7 @@ func TestStampMetadata(t *testing.T) {
 		},
 	}
 
-	labels := map[string]string{"app": "test", "new": "label"}
+	labels := map[string]string{"app": "test.json", "new": "label"}
 	annotations := map[string]string{"note": "hello"}
 
 	stampMetadata(obj, labels, annotations)
@@ -204,7 +204,7 @@ func TestStampMetadata(t *testing.T) {
 	if gotLabels["existing"] != "label" {
 		t.Error("stampMetadata removed existing label")
 	}
-	if gotLabels["app"] != "test" || gotLabels["new"] != "label" {
+	if gotLabels["app"] != "test.json" || gotLabels["new"] != "label" {
 		t.Error("stampMetadata did not add new labels")
 	}
 
@@ -274,7 +274,7 @@ func TestIsCRDEstablished(t *testing.T) {
 			obj := &unstructured.Unstructured{Object: map[string]interface{}{
 				"apiVersion": "apiextensions.k8s.io/v1",
 				"kind":       "CustomResourceDefinition",
-				"metadata":   map[string]interface{}{"name": "test.example.com"},
+				"metadata":   map[string]interface{}{"name": "test.json.example.com"},
 			}}
 			if tt.conditions != nil {
 				err := unstructured.SetNestedSlice(obj.Object, tt.conditions, "status", "conditions")
@@ -374,7 +374,7 @@ func TestIsDeploymentReady(t *testing.T) {
 			obj := &unstructured.Unstructured{Object: map[string]interface{}{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
-				"metadata":   map[string]interface{}{"name": "test"},
+				"metadata":   map[string]interface{}{"name": "test.json"},
 			}}
 			for k, v := range tt.obj {
 				obj.Object[k] = v
@@ -399,7 +399,7 @@ func TestSetDefaultSubjectNamespaces(t *testing.T) {
 		Object: map[string]interface{}{
 			"apiVersion": "rbac.authorization.k8s.io/v1",
 			"kind":       "ClusterRoleBinding",
-			"metadata":   map[string]interface{}{"name": "test-binding"},
+			"metadata":   map[string]interface{}{"name": "test.json-binding"},
 			"subjects": []interface{}{
 				map[string]interface{}{"kind": "ServiceAccount", "name": "my-sa"},
 				map[string]interface{}{"kind": "ServiceAccount", "name": "other-sa", "namespace": "kept-ns"},
@@ -447,7 +447,7 @@ func TestSetDefaultSubjectNamespacesNonBinding(t *testing.T) {
 }
 
 func TestEnsurePullSecret(t *testing.T) {
-	a := newTestApplier("test-ns")
+	a := newTestApplier("test.json-ns")
 	ctx := context.Background()
 
 	pullSecretData := []byte(`{"auths":{"registry.example.com":{"auth":"dGVzdDp0ZXN0"}}}`)
@@ -458,7 +458,7 @@ func TestEnsurePullSecret(t *testing.T) {
 }
 
 func TestEnsurePullSecretDryRun(t *testing.T) {
-	a := newTestApplier("test-ns")
+	a := newTestApplier("test.json-ns")
 	a.dryRun = true
 	ctx := context.Background()
 
@@ -468,7 +468,7 @@ func TestEnsurePullSecretDryRun(t *testing.T) {
 }
 
 func TestDeletePullSecret(t *testing.T) {
-	a := newTestApplier("test-ns")
+	a := newTestApplier("test.json-ns")
 	ctx := context.Background()
 
 	// Deleting a non-existent secret should succeed (not found is OK)
@@ -478,7 +478,7 @@ func TestDeletePullSecret(t *testing.T) {
 }
 
 func TestDeletePullSecretDryRun(t *testing.T) {
-	a := newTestApplier("test-ns")
+	a := newTestApplier("test.json-ns")
 	a.dryRun = true
 	ctx := context.Background()
 
@@ -488,7 +488,7 @@ func TestDeletePullSecretDryRun(t *testing.T) {
 }
 
 func TestDeleteNamespaceProtected(t *testing.T) {
-	a := newTestApplier("test-ns")
+	a := newTestApplier("test.json-ns")
 	ctx := context.Background()
 
 	for _, ns := range []string{"default", "kube-system", "kube-public", "kube-node-lease"} {
@@ -499,7 +499,7 @@ func TestDeleteNamespaceProtected(t *testing.T) {
 }
 
 func TestDeleteNamespaceNotFound(t *testing.T) {
-	a := newTestApplier("test-ns")
+	a := newTestApplier("test.json-ns")
 	ctx := context.Background()
 
 	// Non-existent, non-protected namespace should not error
@@ -509,31 +509,31 @@ func TestDeleteNamespaceNotFound(t *testing.T) {
 }
 
 func TestApplyDryRun(t *testing.T) {
-	a := newTestApplier("test-ns")
+	a := newTestApplier("test.json-ns")
 	a.dryRun = true
 	ctx := context.Background()
 
 	manifests := &bundle.Manifests{
 		RBAC: []*unstructured.Unstructured{
-			makeUnstructured("rbac.authorization.k8s.io/v1", "ClusterRole", "test-role", ""),
+			makeUnstructured("rbac.authorization.k8s.io/v1", "ClusterRole", "test.json-role", ""),
 		},
 		Deployments: []*unstructured.Unstructured{
-			makeUnstructured("apps/v1", "Deployment", "test-deploy", "test-ns"),
+			makeUnstructured("apps/v1", "Deployment", "test.json-deploy", "test.json-ns"),
 		},
 		Services: []*unstructured.Unstructured{
-			makeUnstructured("v1", "Service", "test-svc", "test-ns"),
+			makeUnstructured("v1", "Service", "test.json-svc", "test.json-ns"),
 		},
 		Other: []*unstructured.Unstructured{
-			makeUnstructured("v1", "ConfigMap", "test-cm", "test-ns"),
+			makeUnstructured("v1", "ConfigMap", "test.json-cm", "test.json-ns"),
 		},
 	}
 
 	ic := &InstallContext{
-		PackageName: "test-pkg",
+		PackageName: "test.json-pkg",
 		Version:     "1.0.0",
 		Channel:     "stable",
-		BundleName:  "test-bundle",
-		BundleImage: "example.com/test:v1",
+		BundleName:  "test.json-bundle",
+		BundleImage: "example.com/test.json:v1",
 		CatalogRef:  "example.com/catalog:latest",
 	}
 
@@ -543,13 +543,13 @@ func TestApplyDryRun(t *testing.T) {
 }
 
 func TestDeleteResourcesDryRun(t *testing.T) {
-	a := newTestApplier("test-ns")
+	a := newTestApplier("test.json-ns")
 	a.dryRun = true
 	ctx := context.Background()
 
 	resources := []unstructured.Unstructured{
-		*makeUnstructured("v1", "ConfigMap", "cm1", "test-ns"),
-		*makeUnstructured("v1", "Service", "svc1", "test-ns"),
+		*makeUnstructured("v1", "ConfigMap", "cm1", "test.json-ns"),
+		*makeUnstructured("v1", "Service", "svc1", "test.json-ns"),
 	}
 
 	if err := a.DeleteResources(ctx, resources); err != nil {
@@ -558,11 +558,11 @@ func TestDeleteResourcesDryRun(t *testing.T) {
 }
 
 func TestDeleteResourcesNotFound(t *testing.T) {
-	a := newTestApplier("test-ns")
+	a := newTestApplier("test.json-ns")
 	ctx := context.Background()
 
 	resources := []unstructured.Unstructured{
-		*makeUnstructured("v1", "ConfigMap", "nonexistent", "test-ns"),
+		*makeUnstructured("v1", "ConfigMap", "nonexistent", "test.json-ns"),
 	}
 
 	// Deleting non-existent resources should succeed (not found is ignored)
@@ -572,10 +572,10 @@ func TestDeleteResourcesNotFound(t *testing.T) {
 }
 
 func TestCleanupWebhookConfigurationsEmpty(t *testing.T) {
-	a := newTestApplier("test-ns")
+	a := newTestApplier("test.json-ns")
 	ctx := context.Background()
 
-	cleaned, err := a.CleanupWebhookConfigurations(ctx, "test-ns")
+	cleaned, err := a.CleanupWebhookConfigurations(ctx, "test.json-ns")
 	if err != nil {
 		t.Fatalf("CleanupWebhookConfigurations failed: %v", err)
 	}
@@ -585,11 +585,11 @@ func TestCleanupWebhookConfigurationsEmpty(t *testing.T) {
 }
 
 func TestApplyStampsTrackingMetadata(t *testing.T) {
-	a := newTestApplier("test-ns")
+	a := newTestApplier("test.json-ns")
 	a.dryRun = true
 	ctx := context.Background()
 
-	cm := makeUnstructured("v1", "ConfigMap", "tracked-cm", "test-ns")
+	cm := makeUnstructured("v1", "ConfigMap", "tracked-cm", "test.json-ns")
 	manifests := &bundle.Manifests{
 		Other: []*unstructured.Unstructured{cm},
 	}

@@ -14,6 +14,7 @@ import (
 // extracted OLM bundle manifests.
 type ChartGenerator struct {
 	PackageName  string
+	ChartName    string
 	Version      string
 	Channel      string
 	CatalogRef   string
@@ -23,9 +24,16 @@ type ChartGenerator struct {
 	Namespace    string
 }
 
+func (g *ChartGenerator) chartName() string {
+	if g.ChartName != "" {
+		return sanitizeChartName(g.ChartName)
+	}
+	return sanitizeChartName(g.PackageName)
+}
+
 // Generate creates a complete Helm chart directory at outputDir.
 func (g *ChartGenerator) Generate(outputDir string) error {
-	chartName := sanitizeChartName(g.PackageName)
+	chartName := g.chartName()
 
 	crdsDir := filepath.Join(outputDir, "crds")
 	templatesDir := filepath.Join(outputDir, "templates")

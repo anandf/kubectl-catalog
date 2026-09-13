@@ -26,7 +26,7 @@ type imageMapping struct {
 func generateValuesYAML(g *ChartGenerator) string {
 	var b strings.Builder
 
-	b.WriteString("# Default values for " + sanitizeChartName(g.PackageName) + ".\n\n")
+	b.WriteString("# Default values for " + g.chartName() + ".\n\n")
 
 	b.WriteString("nameOverride: \"\"\nfullnameOverride: \"\"\n\n")
 

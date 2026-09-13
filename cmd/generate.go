@@ -32,6 +32,7 @@ var (
 	generateEnv          string
 	generatePushSecret   string
 	generateOutputFormat string
+	generateChartName    string
 )
 
 // generateMetadata holds the installation context written alongside generated manifests.
@@ -94,6 +95,7 @@ Supports all the same flags as "kubectl catalog install":
   --cache-dir        Directory for caching catalog and bundle images
   --refresh          Force re-pull of cached catalog images
   --output-format    Output format: yaml (flat manifests) or helm (Helm chart)
+  --chart-name       Override the Helm chart name (only used with --output-format helm)
 
 On vanilla Kubernetes (--cluster-type k8s), self-signed TLS serving certificates
 are generated for services that use the OpenShift serving-cert annotation.
@@ -201,6 +203,9 @@ Examples:
 			outputDir = tmpDir
 		} else if outputDir == "" {
 			safePkg := filepath.Base(packageName)
+			if isHelmFormat && generateChartName != "" {
+				safePkg = generateChartName
+			}
 			switch {
 			case isHelmFormat:
 				outputDir = filepath.Join(".", "charts", safePkg)
@@ -262,6 +267,7 @@ Examples:
 			if isHelmFormat {
 				chartGen := &helm.ChartGenerator{
 					PackageName:  b.Package,
+					ChartName:    generateChartName,
 					Version:      b.Version,
 					Channel:      b.Channel,
 					CatalogRef:   catalogImage,
@@ -758,6 +764,7 @@ func init() {
 	generateCmd.Flags().StringVar(&generateEnv, "env", "", "comma-separated environment variables to inject into operator containers (e.g. KEY1=val1,KEY2=val2)")
 	generateCmd.Flags().StringVar(&generatePushSecret, "push-secret", "", "path to a credentials file for OCI push authentication (only used with oci:// output)")
 	generateCmd.Flags().StringVar(&generateOutputFormat, "output-format", "yaml", "output format: yaml (flat manifests), helm (Helm chart), or kustomize (Kustomize base+overlays)")
+	generateCmd.Flags().StringVar(&generateChartName, "chart-name", "", "override the Helm chart name (defaults to the package name; only used with --output-format helm)")
 	generateCmd.ValidArgsFunction = completeCatalogPackages
 	registerInstallModeCompletion(generateCmd)
 	err := generateCmd.RegisterFlagCompletionFunc("output-format", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {

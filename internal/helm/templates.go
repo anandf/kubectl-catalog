@@ -87,7 +87,7 @@ func buildEnvBlock(bundleEnvKeys []string) string {
 }
 
 func generateTemplates(g *ChartGenerator) ([]templateFile, error) {
-	chartName := sanitizeChartName(g.PackageName)
+	chartName := g.chartName()
 	images := extractImages(g.Manifests.Deployments)
 	namespace := g.Namespace
 
@@ -243,6 +243,11 @@ func renderServiceAccountTemplate(chartName string, sas []*unstructured.Unstruct
 	var b strings.Builder
 	b.WriteString("{{- if .Values.serviceAccount.create }}\n")
 
+	pullSecretBlock := fmt.Sprintf(`{{- if .Values.pullSecret.create }}
+imagePullSecrets:
+  - name: {{ default (printf "%%s-pull-secret" (include "%s.fullname" .)) .Values.pullSecret.name }}
+{{- end }}`, chartName)
+
 	for i, sa := range sas {
 		if i > 0 {
 			b.WriteString("---\n")
@@ -251,7 +256,9 @@ func renderServiceAccountTemplate(chartName string, sas []*unstructured.Unstruct
 		tb.ReplaceNamespace()
 		tb.SetValue([]string{"metadata", "name"},
 			fmt.Sprintf(`{{ include "%s.serviceAccountName" . }}`, chartName))
-		b.WriteString(tb.Build())
+		out := tb.Build()
+		out += pullSecretBlock + "\n"
+		b.WriteString(out)
 	}
 
 	b.WriteString("{{- end }}\n")

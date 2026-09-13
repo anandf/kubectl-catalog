@@ -50,11 +50,11 @@ func newTestManager(ns string, objects ...runtime.Object) *Manager {
 }
 
 func TestInstall_CreatesResources(t *testing.T) {
-	m := newTestManager("test-ns")
+	m := newTestManager("test.json-ns")
 
 	err := m.Install(context.Background(), InstallOptions{
 		PackageName:  "my-operator",
-		CatalogImage: "quay.io/test:v1",
+		CatalogImage: "quay.io/test.json:v1",
 		CatalogType:  "redhat",
 		Channel:      "stable",
 		InstallMode:  "AllNamespaces",
@@ -76,7 +76,7 @@ func TestInstall_CreatesResources(t *testing.T) {
 	}
 
 	expectedPatches := map[string]bool{
-		"namespaces/test-ns":                    false,
+		"namespaces/test.json-ns":               false,
 		"operatorgroups/kubectl-catalog-og":     false,
 		"catalogsources/kubectl-catalog-redhat": false,
 		"subscriptions/my-operator":             false,
@@ -102,17 +102,17 @@ func TestInstall_SkipsExistingOperatorGroup(t *testing.T) {
 			"kind":       "OperatorGroup",
 			"metadata": map[string]interface{}{
 				"name":      "existing-og",
-				"namespace": "test-ns",
+				"namespace": "test.json-ns",
 			},
 			"spec": map[string]interface{}{},
 		},
 	}
 
-	m := newTestManager("test-ns", existingOG)
+	m := newTestManager("test.json-ns", existingOG)
 
 	err := m.Install(context.Background(), InstallOptions{
 		PackageName:  "my-operator",
-		CatalogImage: "quay.io/test:v1",
+		CatalogImage: "quay.io/test.json:v1",
 		CatalogType:  "community",
 		Channel:      "alpha",
 		NoWait:       true,
@@ -122,7 +122,7 @@ func TestInstall_SkipsExistingOperatorGroup(t *testing.T) {
 	}
 
 	// Should not have created a second OperatorGroup
-	list, _ := m.dynamicClient.Resource(OperatorGroupGVR()).Namespace("test-ns").List(
+	list, _ := m.dynamicClient.Resource(OperatorGroupGVR()).Namespace("test.json-ns").List(
 		context.Background(), metav1.ListOptions{},
 	)
 	if len(list.Items) != 1 {
@@ -140,7 +140,7 @@ func TestInstall_SubscriptionAlreadyExists(t *testing.T) {
 			"kind":       "Subscription",
 			"metadata": map[string]interface{}{
 				"name":      "my-operator",
-				"namespace": "test-ns",
+				"namespace": "test.json-ns",
 			},
 			"spec": map[string]interface{}{
 				"channel": "stable",
@@ -148,11 +148,11 @@ func TestInstall_SubscriptionAlreadyExists(t *testing.T) {
 		},
 	}
 
-	m := newTestManager("test-ns", existingSub)
+	m := newTestManager("test.json-ns", existingSub)
 
 	err := m.Install(context.Background(), InstallOptions{
 		PackageName:  "my-operator",
-		CatalogImage: "quay.io/test:v1",
+		CatalogImage: "quay.io/test.json:v1",
 		CatalogType:  "redhat",
 		Channel:      "stable",
 		Force:        false,
@@ -170,7 +170,7 @@ func TestInstall_ForceRecreateSub(t *testing.T) {
 			"kind":       "Subscription",
 			"metadata": map[string]interface{}{
 				"name":      "my-operator",
-				"namespace": "test-ns",
+				"namespace": "test.json-ns",
 			},
 			"spec": map[string]interface{}{
 				"channel": "stable",
@@ -178,11 +178,11 @@ func TestInstall_ForceRecreateSub(t *testing.T) {
 		},
 	}
 
-	m := newTestManager("test-ns", existingSub)
+	m := newTestManager("test.json-ns", existingSub)
 
 	err := m.Install(context.Background(), InstallOptions{
 		PackageName:  "my-operator",
-		CatalogImage: "quay.io/test:v1",
+		CatalogImage: "quay.io/test.json:v1",
 		CatalogType:  "redhat",
 		Channel:      "preview",
 		Force:        true,
@@ -194,12 +194,12 @@ func TestInstall_ForceRecreateSub(t *testing.T) {
 }
 
 func TestInstall_DryRun(t *testing.T) {
-	m := newTestManager("test-ns")
+	m := newTestManager("test.json-ns")
 	m.dryRun = true
 
 	err := m.Install(context.Background(), InstallOptions{
 		PackageName:  "my-operator",
-		CatalogImage: "quay.io/test:v1",
+		CatalogImage: "quay.io/test.json:v1",
 		CatalogType:  "redhat",
 		Channel:      "stable",
 		NoWait:       true,
@@ -213,7 +213,7 @@ func TestInstall_OLMNotInstalled(t *testing.T) {
 	m := &Manager{
 		dynamicClient:   newFakeDynamicClient(),
 		discoveryClient: fakeDiscoveryWithoutOLM(),
-		namespace:       "test-ns",
+		namespace:       "test.json-ns",
 	}
 
 	err := m.Install(context.Background(), InstallOptions{
@@ -233,7 +233,7 @@ func TestUninstall_DeletesResources(t *testing.T) {
 			"kind":       "Subscription",
 			"metadata": map[string]interface{}{
 				"name":      "my-operator",
-				"namespace": "test-ns",
+				"namespace": "test.json-ns",
 				"labels": map[string]interface{}{
 					"kubectl-catalog.io/package":   "my-operator",
 					"app.kubernetes.io/managed-by": "kubectl-catalog",
@@ -254,7 +254,7 @@ func TestUninstall_DeletesResources(t *testing.T) {
 			"kind":       "ClusterServiceVersion",
 			"metadata": map[string]interface{}{
 				"name":      "my-operator.v1.0.0",
-				"namespace": "test-ns",
+				"namespace": "test.json-ns",
 			},
 		},
 	}
@@ -265,7 +265,7 @@ func TestUninstall_DeletesResources(t *testing.T) {
 			"kind":       "CatalogSource",
 			"metadata": map[string]interface{}{
 				"name":      "kubectl-catalog-redhat",
-				"namespace": "test-ns",
+				"namespace": "test.json-ns",
 				"labels": map[string]interface{}{
 					"app.kubernetes.io/managed-by": "kubectl-catalog",
 				},
@@ -279,7 +279,7 @@ func TestUninstall_DeletesResources(t *testing.T) {
 			"kind":       "OperatorGroup",
 			"metadata": map[string]interface{}{
 				"name":      "kubectl-catalog-og",
-				"namespace": "test-ns",
+				"namespace": "test.json-ns",
 				"labels": map[string]interface{}{
 					"app.kubernetes.io/managed-by": "kubectl-catalog",
 				},
@@ -287,7 +287,7 @@ func TestUninstall_DeletesResources(t *testing.T) {
 		},
 	}
 
-	m := newTestManager("test-ns", sub, csv, cs, og)
+	m := newTestManager("test.json-ns", sub, csv, cs, og)
 
 	err := m.Uninstall(context.Background(), "my-operator")
 	if err != nil {
@@ -302,12 +302,12 @@ func TestFindSubscription_ByName(t *testing.T) {
 			"kind":       "Subscription",
 			"metadata": map[string]interface{}{
 				"name":      "my-operator",
-				"namespace": "test-ns",
+				"namespace": "test.json-ns",
 			},
 		},
 	}
 
-	m := newTestManager("test-ns", sub)
+	m := newTestManager("test.json-ns", sub)
 
 	found, err := m.findSubscription(context.Background(), "my-operator")
 	if err != nil {
@@ -319,7 +319,7 @@ func TestFindSubscription_ByName(t *testing.T) {
 }
 
 func TestFindSubscription_NotFound(t *testing.T) {
-	m := newTestManager("test-ns")
+	m := newTestManager("test.json-ns")
 
 	_, err := m.findSubscription(context.Background(), "missing-operator")
 	if err == nil {

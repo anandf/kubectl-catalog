@@ -9,10 +9,10 @@ import (
 
 func TestDecomposeImage(t *testing.T) {
 	tests := []struct {
-		ref        string
-		wantReg    string
-		wantRepo   string
-		wantTag    string
+		ref      string
+		wantReg  string
+		wantRepo string
+		wantTag  string
 	}{
 		{"quay.io/example/operator:v1.0.0", "quay.io", "example/operator", "v1.0.0"},
 		{"gcr.io/project/image:latest", "gcr.io", "project/image", "latest"},
@@ -122,7 +122,7 @@ func TestHasWebhookResources(t *testing.T) {
 
 func TestGenerateValuesYAML_CertManagerDefault(t *testing.T) {
 	g := &ChartGenerator{
-		PackageName:  "test",
+		PackageName:  "test.json",
 		Version:      "1.0.0",
 		CertProvider: "cert-manager",
 		Manifests:    &bundle.Manifests{},
@@ -133,7 +133,7 @@ func TestGenerateValuesYAML_CertManagerDefault(t *testing.T) {
 	}
 
 	g2 := &ChartGenerator{
-		PackageName:  "test",
+		PackageName:  "test.json",
 		Version:      "1.0.0",
 		CertProvider: "self-signed",
 		Manifests:    &bundle.Manifests{},
