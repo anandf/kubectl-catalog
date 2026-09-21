@@ -82,6 +82,18 @@ func (p *ImagePuller) VerifyCredentials(ctx context.Context, imageRef string) er
 	return nil
 }
 
+// CheckImageExists performs a lightweight HEAD request to check whether an
+// image exists in the registry. Returns true if the image is reachable and
+// the credentials (if any) are valid for it.
+func (p *ImagePuller) CheckImageExists(ctx context.Context, imageRef string) bool {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return false
+	}
+	_, err = remote.Head(ref, remote.WithAuthFromKeychain(p.keychain), remote.WithContext(ctx))
+	return err == nil
+}
+
 // PullCatalog pulls a File-Based Catalog image and extracts only the catalog
 // config files to the local cache. Returns the path to the extracted directory.
 func (p *ImagePuller) PullCatalog(ctx context.Context, imageRef string) (string, error) {

@@ -12,7 +12,7 @@ func generateNotes(g *ChartGenerator) string {
 	b.WriteString("Namespace: {{ .Release.Namespace }}\n")
 	b.WriteString("Version:   {{ .Chart.AppVersion }}\n\n")
 
-	if len(g.Manifests.CRDs) > 0 {
+	if !g.SkipCRDs && len(g.Manifests.CRDs) > 0 {
 		b.WriteString("CRDs installed:\n")
 		for _, crd := range g.Manifests.CRDs {
 			fmt.Fprintf(&b, "  - %s\n", crd.GetName())
@@ -24,11 +24,13 @@ func generateNotes(g *ChartGenerator) string {
 		b.WriteString("  kubectl apply -f <chart-dir>/crds/\n\n")
 	}
 
-	b.WriteString("Check operator status:\n")
-	b.WriteString("  kubectl get deployment -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ .Release.Namespace }}\n\n")
+	if !g.SkipTemplates {
+		b.WriteString("Check operator status:\n")
+		b.WriteString("  kubectl get deployment -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ .Release.Namespace }}\n\n")
 
-	b.WriteString("View operator logs:\n")
-	b.WriteString("  kubectl logs -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ .Release.Namespace }} -f\n")
+		b.WriteString("View operator logs:\n")
+		b.WriteString("  kubectl logs -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ .Release.Namespace }} -f\n")
+	}
 
 	if meta := g.Manifests.CSVMetadata; meta != nil && len(meta.Links) > 0 {
 		b.WriteString("\nUseful links:\n")

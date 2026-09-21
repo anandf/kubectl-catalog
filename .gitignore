@@ -35,6 +35,7 @@ dist/
 
 # Binary
 kubectl-catalog
+oc-catalog
 
 # generated helm charts
 charts/

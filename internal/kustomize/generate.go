@@ -21,14 +21,21 @@ type KustomizeGenerator struct {
 	InstallMode      string
 	Namespace        string
 	PullSecretLabels map[string]string
+	SkipCRDs         bool
+	SkipTemplates    bool
+	MirrorPrefix     string
+	CheckImage       func(imageRef string) bool
 }
 
 func (g *KustomizeGenerator) Generate(outputDir string) error {
 	baseDir := filepath.Join(outputDir, "base")
-	crdsDir := filepath.Join(baseDir, "crds")
 	overlayDir := filepath.Join(outputDir, "overlays", "default")
 
-	for _, dir := range []string{baseDir, crdsDir, overlayDir} {
+	dirs := []string{baseDir, overlayDir}
+	if !g.SkipCRDs {
+		dirs = append(dirs, filepath.Join(baseDir, "crds"))
+	}
+	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating directory %s: %w", dir, err)
 		}
@@ -36,74 +43,82 @@ func (g *KustomizeGenerator) Generate(outputDir string) error {
 
 	// 1. Write CRDs to base/crds/
 	var crdFiles []string
-	crdNameCount := make(map[string]int)
-	for _, crd := range g.Manifests.CRDs {
-		name := crd.GetName()
-		if name == "" {
-			name = "unnamed-crd"
+	if !g.SkipCRDs {
+		crdsDir := filepath.Join(baseDir, "crds")
+		crdNameCount := make(map[string]int)
+		for _, crd := range g.Manifests.CRDs {
+			name := crd.GetName()
+			if name == "" {
+				name = "unnamed-crd"
+			}
+			safeName := strings.ToLower(strings.ReplaceAll(name, "/", "-"))
+			crdNameCount[safeName]++
+			if crdNameCount[safeName] > 1 {
+				safeName = fmt.Sprintf("%s-%d", safeName, crdNameCount[safeName])
+			}
+			filename := safeName + ".yaml"
+			data, err := yaml.Marshal(crd.Object)
+			if err != nil {
+				return fmt.Errorf("marshaling CRD %s: %w", name, err)
+			}
+			if err := os.WriteFile(filepath.Join(crdsDir, filename), data, 0o644); err != nil {
+				return fmt.Errorf("writing CRD %s: %w", name, err)
+			}
+			crdFiles = append(crdFiles, "crds/"+filename)
 		}
-		safeName := strings.ToLower(strings.ReplaceAll(name, "/", "-"))
-		crdNameCount[safeName]++
-		if crdNameCount[safeName] > 1 {
-			safeName = fmt.Sprintf("%s-%d", safeName, crdNameCount[safeName])
-		}
-		filename := safeName + ".yaml"
-		data, err := yaml.Marshal(crd.Object)
-		if err != nil {
-			return fmt.Errorf("marshaling CRD %s: %w", name, err)
-		}
-		if err := os.WriteFile(filepath.Join(crdsDir, filename), data, 0o644); err != nil {
-			return fmt.Errorf("writing CRD %s: %w", name, err)
-		}
-		crdFiles = append(crdFiles, "crds/"+filename)
 	}
 
 	// 2. Write all other resources to base/, one file per resource
 	var resourceFiles []string
-	fileCountByName := make(map[string]int)
+	if !g.SkipTemplates {
+		fileCountByName := make(map[string]int)
 
-	writeResources := func(resources []*unstructured.Unstructured) error {
-		for _, obj := range resources {
-			filename := resourceFilename(obj)
-			fileCountByName[filename]++
-			if fileCountByName[filename] > 1 {
-				ext := filepath.Ext(filename)
-				base := strings.TrimSuffix(filename, ext)
-				filename = fmt.Sprintf("%s-%d%s", base, fileCountByName[filename], ext)
+		writeResources := func(resources []*unstructured.Unstructured) error {
+			for _, obj := range resources {
+				filename := resourceFilename(obj)
+				fileCountByName[filename]++
+				if fileCountByName[filename] > 1 {
+					ext := filepath.Ext(filename)
+					base := strings.TrimSuffix(filename, ext)
+					filename = fmt.Sprintf("%s-%d%s", base, fileCountByName[filename], ext)
+				}
+				data, err := yaml.Marshal(obj.Object)
+				if err != nil {
+					return fmt.Errorf("marshaling %s/%s: %w", obj.GetKind(), obj.GetName(), err)
+				}
+				if err := os.WriteFile(filepath.Join(baseDir, filename), data, 0o644); err != nil {
+					return fmt.Errorf("writing %s: %w", filename, err)
+				}
+				resourceFiles = append(resourceFiles, filename)
 			}
-			data, err := yaml.Marshal(obj.Object)
-			if err != nil {
-				return fmt.Errorf("marshaling %s/%s: %w", obj.GetKind(), obj.GetName(), err)
-			}
-			if err := os.WriteFile(filepath.Join(baseDir, filename), data, 0o644); err != nil {
-				return fmt.Errorf("writing %s: %w", filename, err)
-			}
-			resourceFiles = append(resourceFiles, filename)
+			return nil
 		}
-		return nil
-	}
 
-	// 3. Generate pull secret and wire it into ServiceAccounts
-	pullSecretName := strings.ToLower(strings.ReplaceAll(g.PackageName, "_", "-")) + "-pull-secret"
-	pullSecretContent := generatePullSecret(pullSecretName, g.Namespace, g.PullSecretLabels)
-	if err := os.WriteFile(filepath.Join(baseDir, "pull-secret.yaml"), []byte(pullSecretContent), 0o644); err != nil {
-		return fmt.Errorf("writing pull-secret.yaml: %w", err)
-	}
-	resourceFiles = append(resourceFiles, "pull-secret.yaml")
+		// 3. Generate pull secret and wire it into ServiceAccounts
+		pullSecretName := strings.ToLower(strings.ReplaceAll(g.PackageName, "_", "-")) + "-pull-secret"
+		pullSecretContent := generatePullSecret(pullSecretName, g.Namespace, g.PullSecretLabels)
+		if err := os.WriteFile(filepath.Join(baseDir, "pull-secret.yaml"), []byte(pullSecretContent), 0o644); err != nil {
+			return fmt.Errorf("writing pull-secret.yaml: %w", err)
+		}
+		resourceFiles = append(resourceFiles, "pull-secret.yaml")
 
-	injectImagePullSecrets(g.Manifests.RBAC, pullSecretName)
+		injectImagePullSecrets(g.Manifests.RBAC, pullSecretName)
 
-	if err := writeResources(g.Manifests.RBAC); err != nil {
-		return err
-	}
-	if err := writeResources(g.Manifests.Deployments); err != nil {
-		return err
-	}
-	if err := writeResources(g.Manifests.Services); err != nil {
-		return err
-	}
-	if err := writeResources(g.Manifests.Other); err != nil {
-		return err
+		if err := writeResources(g.Manifests.RBAC); err != nil {
+			return err
+		}
+		if g.MirrorPrefix != "" && g.CheckImage != nil {
+			mirrorEnvImageVars(g.Manifests.Deployments, g.MirrorPrefix, g.CheckImage)
+		}
+		if err := writeResources(g.Manifests.Deployments); err != nil {
+			return err
+		}
+		if err := writeResources(g.Manifests.Services); err != nil {
+			return err
+		}
+		if err := writeResources(g.Manifests.Other); err != nil {
+			return err
+		}
 	}
 
 	// 4. Generate base/kustomization.yaml
@@ -114,22 +129,33 @@ func (g *KustomizeGenerator) Generate(outputDir string) error {
 	}
 
 	// 5. Generate overlays/default/kustomization.yaml
-	overlayKustomization := generateOverlayKustomization(g, pullSecretName)
-	if err := os.WriteFile(filepath.Join(overlayDir, "kustomization.yaml"), []byte(overlayKustomization), 0o644); err != nil {
-		return fmt.Errorf("writing overlay kustomization.yaml: %w", err)
-	}
+	if !g.SkipTemplates {
+		pullSecretName := strings.ToLower(strings.ReplaceAll(g.PackageName, "_", "-")) + "-pull-secret"
+		overlayKustomization := generateOverlayKustomization(g, pullSecretName)
+		if err := os.WriteFile(filepath.Join(overlayDir, "kustomization.yaml"), []byte(overlayKustomization), 0o644); err != nil {
+			return fmt.Errorf("writing overlay kustomization.yaml: %w", err)
+		}
 
-	// 6. Generate overlays/default/resources.yaml (commented-out merge patch)
-	resourcesPatch := generateResourcePatch(g)
-	if resourcesPatch != "" {
-		if err := os.WriteFile(filepath.Join(overlayDir, "resources.yaml"), []byte(resourcesPatch), 0o644); err != nil {
-			return fmt.Errorf("writing resources.yaml: %w", err)
+		// 6. Generate overlays/default/resources.yaml (commented-out merge patch)
+		resourcesPatch := generateResourcePatch(g)
+		if resourcesPatch != "" {
+			if err := os.WriteFile(filepath.Join(overlayDir, "resources.yaml"), []byte(resourcesPatch), 0o644); err != nil {
+				return fmt.Errorf("writing resources.yaml: %w", err)
+			}
+		}
+	} else {
+		// Minimal overlay for CRDs-only
+		overlayKustomization := "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n\nresources:\n  - ../../base\n"
+		if err := os.WriteFile(filepath.Join(overlayDir, "kustomization.yaml"), []byte(overlayKustomization), 0o644); err != nil {
+			return fmt.Errorf("writing overlay kustomization.yaml: %w", err)
 		}
 	}
 
 	fmt.Printf("  Kustomize manifests generated at %s\n", outputDir)
 	fmt.Printf("    Base resources: %d\n", len(allFiles))
-	fmt.Printf("    CRDs: %d\n", len(g.Manifests.CRDs))
+	if !g.SkipCRDs {
+		fmt.Printf("    CRDs: %d\n", len(g.Manifests.CRDs))
+	}
 
 	return nil
 }
@@ -222,6 +248,24 @@ func generateOverlayKustomization(g *KustomizeGenerator, pullSecretName string) 
 
 	// Images transformer — container images
 	images := collectAllImages(g.Manifests)
+	if g.MirrorPrefix != "" && g.CheckImage != nil {
+		for i, img := range images {
+			fullRef := img.original
+			if !g.CheckImage(fullRef) {
+				mirrored := mirrorImageRef(fullRef, g.MirrorPrefix)
+				repo, tag := splitImageRef(mirrored)
+				images[i].repo = repo
+				images[i].tag = tag
+				if !g.CheckImage(mirrored) {
+					fmt.Printf("    ⚠ %s → %s (WARNING: not available at mirror)\n", fullRef, mirrored)
+				} else {
+					fmt.Printf("    ✗ %s → %s\n", fullRef, mirrored)
+				}
+			} else {
+				fmt.Printf("    ✓ %s (available)\n", fullRef)
+			}
+		}
+	}
 	if len(images) > 0 {
 		b.WriteString("images:\n")
 		for _, img := range images {
@@ -322,6 +366,68 @@ func splitImageRef(ref string) (string, string) {
 		}
 	}
 	return ref, "latest"
+}
+
+func looksLikeImageRef(s string) bool {
+	return strings.Contains(s, "/") && (strings.Contains(s, ":") || strings.Contains(s, "@"))
+}
+
+func mirrorEnvImageVars(deployments []*unstructured.Unstructured, mirrorPrefix string, checkImage func(string) bool) {
+	for _, dep := range deployments {
+		containers, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+		for _, c := range containers {
+			cMap, ok := c.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			env, ok := cMap["env"].([]interface{})
+			if !ok {
+				continue
+			}
+			for _, e := range env {
+				eMap, ok := e.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				value, _ := eMap["value"].(string)
+				if value == "" || !looksLikeImageRef(value) {
+					continue
+				}
+				if !checkImage(value) {
+					mirrored := mirrorImageRef(value, mirrorPrefix)
+					eMap["value"] = mirrored
+					if !checkImage(mirrored) {
+						fmt.Printf("    ⚠ %s → %s (WARNING: not available at mirror)\n", value, mirrored)
+					} else {
+						fmt.Printf("    ✗ %s → %s\n", value, mirrored)
+					}
+				}
+			}
+		}
+	}
+}
+
+func mirrorImageRef(imageRef, mirrorPrefix string) string {
+	tag := ""
+	repo := imageRef
+
+	if idx := strings.LastIndex(imageRef, "@"); idx >= 0 {
+		repo = imageRef[:idx]
+		tag = imageRef[idx:]
+	} else if idx := strings.LastIndex(imageRef, ":"); idx >= 0 {
+		afterColon := imageRef[idx+1:]
+		if !strings.Contains(afterColon, "/") {
+			repo = imageRef[:idx]
+			tag = imageRef[idx:]
+		}
+	}
+
+	imageName := repo
+	if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+		imageName = repo[idx+1:]
+	}
+
+	return mirrorPrefix + "/" + imageName + tag
 }
 
 func generatePullSecret(name, namespace string, labels map[string]string) string {

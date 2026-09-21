@@ -6,7 +6,8 @@ before:
     - go vet ./...
 
 builds:
-  - main: .
+  - id: kubectl-catalog
+    main: .
     binary: kubectl-catalog
     env:
       - CGO_ENABLED=0
@@ -26,9 +27,42 @@ builds:
       - amd64
       - arm64
 
+  - id: oc-catalog
+    main: .
+    binary: oc-catalog
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/anandf/kubectl-catalog/cmd.version={{.Version}}
+      - -X github.com/anandf/kubectl-catalog/cmd.gitCommit={{.ShortCommit}}
+      - -X github.com/anandf/kubectl-catalog/cmd.buildDate={{.Date}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
 archives:
-  - format: tar.gz
-    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+  - id: kubectl-catalog
+    builds:
+      - kubectl-catalog
+    format: tar.gz
+    name_template: "kubectl-catalog-{{ .Os }}-{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+  - id: oc-catalog
+    builds:
+      - oc-catalog
+    format: tar.gz
+    name_template: "oc-catalog-{{ .Os }}-{{ .Arch }}"
     format_overrides:
       - goos: windows
         format: zip

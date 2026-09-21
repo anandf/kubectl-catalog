@@ -493,6 +493,118 @@ func TestGenerate_ChartNameOverride(t *testing.T) {
 	}
 }
 
+func TestGenerate_CRDsOnly(t *testing.T) {
+	dir := t.TempDir()
+
+	g := &ChartGenerator{
+		PackageName:   "my-operator",
+		Version:       "1.0.0",
+		Namespace:     "default",
+		SkipTemplates: true,
+		Manifests: &bundle.Manifests{
+			CRDs: []*unstructured.Unstructured{
+				makeObj("apiextensions.k8s.io/v1", "CustomResourceDefinition", "widgets.example.com"),
+				makeObj("apiextensions.k8s.io/v1", "CustomResourceDefinition", "gadgets.example.com"),
+			},
+			Deployments: []*unstructured.Unstructured{
+				makeDeployment("controller-manager", "quay.io/example/operator:v1.0.0"),
+			},
+		},
+	}
+
+	if err := g.Generate(dir); err != nil {
+		t.Fatalf("Generate() error: %v", err)
+	}
+
+	// CRDs directory and files should exist
+	for _, crdName := range []string{"widgets.example.com.yaml", "gadgets.example.com.yaml"} {
+		path := filepath.Join(dir, "crds", crdName)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			t.Errorf("expected CRD file %s to exist", crdName)
+		}
+	}
+
+	// Templates directory should NOT exist
+	if _, err := os.Stat(filepath.Join(dir, "templates")); !os.IsNotExist(err) {
+		t.Error("templates/ directory should not exist when SkipTemplates is true")
+	}
+
+	// Chart.yaml and .helmignore should still exist
+	for _, f := range []string{"Chart.yaml", "values.yaml", ".helmignore"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); os.IsNotExist(err) {
+			t.Errorf("expected %s to exist", f)
+		}
+	}
+
+	// values.yaml should be minimal (CRDs-only comment)
+	data, err := os.ReadFile(filepath.Join(dir, "values.yaml"))
+	if err != nil {
+		t.Fatalf("reading values.yaml: %v", err)
+	}
+	if !strings.Contains(string(data), "only CRDs") {
+		t.Error("values.yaml should indicate this chart contains only CRDs")
+	}
+}
+
+func TestGenerate_TemplatesOnly(t *testing.T) {
+	dir := t.TempDir()
+
+	g := &ChartGenerator{
+		PackageName:  "my-operator",
+		Version:      "1.0.0",
+		CertProvider: "self-signed",
+		InstallMode:  "AllNamespaces",
+		Namespace:    "operators",
+		SkipCRDs:     true,
+		Manifests: &bundle.Manifests{
+			CRDs: []*unstructured.Unstructured{
+				makeObj("apiextensions.k8s.io/v1", "CustomResourceDefinition", "widgets.example.com"),
+			},
+			Deployments: []*unstructured.Unstructured{
+				makeDeployment("controller-manager", "quay.io/example/operator:v1.0.0"),
+			},
+			RBAC: []*unstructured.Unstructured{
+				makeObj("v1", "ServiceAccount", "controller-manager"),
+			},
+		},
+	}
+
+	if err := g.Generate(dir); err != nil {
+		t.Fatalf("Generate() error: %v", err)
+	}
+
+	// Templates directory and files should exist
+	for _, f := range []string{"_helpers.tpl", "NOTES.txt", "deployment.yaml"} {
+		path := filepath.Join(dir, "templates", f)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			t.Errorf("expected template file %s to exist", f)
+		}
+	}
+
+	// CRDs directory should NOT exist
+	if _, err := os.Stat(filepath.Join(dir, "crds")); !os.IsNotExist(err) {
+		t.Error("crds/ directory should not exist when SkipCRDs is true")
+	}
+
+	// NOTES.txt should not mention CRD update instructions
+	data, err := os.ReadFile(filepath.Join(dir, "templates", "NOTES.txt"))
+	if err != nil {
+		t.Fatalf("reading NOTES.txt: %v", err)
+	}
+	if strings.Contains(string(data), "kubectl apply -f <chart-dir>/crds/") {
+		t.Error("NOTES.txt should not contain CRD update instructions when CRDs are excluded")
+	}
+
+	// values.yaml should have full content (not the minimal CRD-only version)
+	valData, err := os.ReadFile(filepath.Join(dir, "values.yaml"))
+	if err != nil {
+		t.Fatalf("reading values.yaml: %v", err)
+	}
+	if !strings.Contains(string(valData), "replicaCount:") {
+		t.Error("values.yaml should have full template values when SkipTemplates is false")
+	}
+}
+
 // --- Test helpers ---
 
 func makeObj(apiVersion, kind, name string) *unstructured.Unstructured {

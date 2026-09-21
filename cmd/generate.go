@@ -25,14 +25,17 @@ import (
 )
 
 var (
-	generateChannel      string
-	generateVersion      string
-	generateMode         string
-	generateOutput       string
-	generateEnv          string
-	generatePushSecret   string
-	generateOutputFormat string
-	generateChartName    string
+	generateChannel          string
+	generateVersion          string
+	generateMode             string
+	generateOutput           string
+	generateEnv              string
+	generatePushSecret       string
+	generateOutputFormat     string
+	generateChartName        string
+	generateSkipCRDs      bool
+	generateSkipTemplates bool
+	generateMirror        string
 )
 
 // generateMetadata holds the installation context written alongside generated manifests.
@@ -140,6 +143,16 @@ Examples:
 
 		isHelmFormat := generateOutputFormat == "helm"
 		isKustomizeFormat := generateOutputFormat == "kustomize"
+
+		if !isHelmFormat && !isKustomizeFormat && (cmd.Flags().Changed("skip-crds") || cmd.Flags().Changed("skip-templates")) {
+			return fmt.Errorf("--skip-crds and --skip-templates can only be used with --output-format helm or kustomize")
+		}
+		if generateSkipCRDs && generateSkipTemplates {
+			return fmt.Errorf("--skip-crds and --skip-templates cannot both be set")
+		}
+		if !isHelmFormat && !isKustomizeFormat && cmd.Flags().Changed("mirror") {
+			return fmt.Errorf("--mirror can only be used with --output-format helm or kustomize")
+		}
 
 		catalogImage, err := resolveCatalogImage("")
 		if err != nil {
@@ -266,29 +279,47 @@ Examples:
 
 			if isHelmFormat {
 				chartGen := &helm.ChartGenerator{
-					PackageName:  b.Package,
-					ChartName:    generateChartName,
-					Version:      b.Version,
-					Channel:      b.Channel,
-					CatalogRef:   catalogImage,
-					Manifests:    manifests,
-					CertProvider: certProvider,
-					InstallMode:  mode,
-					Namespace:    targetNamespace,
+					PackageName:      b.Package,
+					ChartName:        generateChartName,
+					Version:          b.Version,
+					Channel:          b.Channel,
+					CatalogRef:       catalogImage,
+					Manifests:        manifests,
+					CertProvider:     certProvider,
+					InstallMode:      mode,
+					Namespace:        targetNamespace,
+					SkipCRDs:         generateSkipCRDs,
+					SkipTemplates:    generateSkipTemplates,
+					MirrorPrefix:     generateMirror,
+				}
+				if generateMirror != "" {
+					fmt.Println("  Checking image availability...")
+					chartGen.CheckImage = func(imageRef string) bool {
+						return puller.CheckImageExists(ctx, imageRef)
+					}
 				}
 				if err := chartGen.Generate(bundleOutputDir); err != nil {
 					return fmt.Errorf("failed to generate Helm chart for %q: %w", b.Name, err)
 				}
 			} else if isKustomizeFormat {
 				kustomizeGen := &kustomizegen.KustomizeGenerator{
-					PackageName:  b.Package,
-					Version:      b.Version,
-					Channel:      b.Channel,
-					CatalogRef:   catalogImage,
-					Manifests:    manifests,
-					CertProvider: certProvider,
-					InstallMode:  mode,
-					Namespace:    targetNamespace,
+					PackageName:   b.Package,
+					Version:       b.Version,
+					Channel:       b.Channel,
+					CatalogRef:    catalogImage,
+					Manifests:     manifests,
+					CertProvider:  certProvider,
+					InstallMode:   mode,
+					Namespace:     targetNamespace,
+					SkipCRDs:      generateSkipCRDs,
+					SkipTemplates: generateSkipTemplates,
+					MirrorPrefix:  generateMirror,
+				}
+				if generateMirror != "" {
+					fmt.Println("  Checking image availability...")
+					kustomizeGen.CheckImage = func(imageRef string) bool {
+						return puller.CheckImageExists(ctx, imageRef)
+					}
 				}
 				if err := kustomizeGen.Generate(bundleOutputDir); err != nil {
 					return fmt.Errorf("failed to generate Kustomize manifests for %q: %w", b.Name, err)
@@ -765,6 +796,9 @@ func init() {
 	generateCmd.Flags().StringVar(&generatePushSecret, "push-secret", "", "path to a credentials file for OCI push authentication (only used with oci:// output)")
 	generateCmd.Flags().StringVar(&generateOutputFormat, "output-format", "yaml", "output format: yaml (flat manifests), helm (Helm chart), or kustomize (Kustomize base+overlays)")
 	generateCmd.Flags().StringVar(&generateChartName, "chart-name", "", "override the Helm chart name (defaults to the package name; only used with --output-format helm)")
+	generateCmd.Flags().BoolVar(&generateSkipCRDs, "skip-crds", false, "skip CRDs in the generated output (only used with --output-format helm or kustomize)")
+	generateCmd.Flags().BoolVar(&generateSkipTemplates, "skip-templates", false, "skip templates/resources in the generated output (only used with --output-format helm or kustomize)")
+	generateCmd.Flags().StringVar(&generateMirror, "mirror", "", "mirror prefix for unavailable images, e.g. quay.io/myorg (only used with --output-format helm or kustomize)")
 	generateCmd.ValidArgsFunction = completeCatalogPackages
 	registerInstallModeCompletion(generateCmd)
 	err := generateCmd.RegisterFlagCompletionFunc("output-format", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {

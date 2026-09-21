@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,10 +17,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var binaryName = detectBinaryName()
+
 var rootCmd = &cobra.Command{
-	Use:   "kubectl-catalog",
-	Short: "A kubectl plugin for installing OLM catalog operators on vanilla Kubernetes",
-	Long: `kubectl-catalog works with OpenShift Catalog bundles placed in public container
+	Use:   binaryName,
+	Short: "A kubectl/oc plugin for installing OLM catalog operators on vanilla Kubernetes",
+	Long: binaryName + ` works with OpenShift Catalog bundles placed in public container
 registries and helps install OLM bundles without requiring OLM on the target cluster.
 
 It supports:
@@ -29,9 +32,20 @@ It supports:
   - Installing operators by extracting and applying bundle manifests
   - Managing upgrades using the catalog's upgrade graph
 
-Install the binary as kubectl-catalog on your PATH to use it as "kubectl catalog".`,
+Install the binary as kubectl-catalog or oc-catalog on your PATH to use it as
+"kubectl catalog" or "oc catalog".`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+}
+
+func detectBinaryName() string {
+	if len(os.Args) > 0 {
+		base := filepath.Base(os.Args[0])
+		if strings.HasPrefix(base, "oc-") || base == "oc-catalog" || base == "oc-catalog.exe" {
+			return "oc-catalog"
+		}
+	}
+	return "kubectl-catalog"
 }
 
 // Catalog types and their default image bases.

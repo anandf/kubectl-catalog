@@ -28,6 +28,11 @@ func generateValuesYAML(g *ChartGenerator) string {
 
 	b.WriteString("# Default values for " + g.chartName() + ".\n\n")
 
+	if g.SkipTemplates {
+		b.WriteString("# This chart contains only CRDs.\n")
+		return b.String()
+	}
+
 	b.WriteString("nameOverride: \"\"\nfullnameOverride: \"\"\n\n")
 
 	// Replicas
@@ -36,6 +41,22 @@ func generateValuesYAML(g *ChartGenerator) string {
 
 	// Images
 	images := extractImages(g.Manifests.Deployments)
+	if g.MirrorPrefix != "" && g.CheckImage != nil {
+		for i, img := range images {
+			ref := reconstructImageRef(img.Config)
+			if !g.CheckImage(ref) {
+				images[i].Config = mirrorImageConfig(img.Config, g.MirrorPrefix)
+				mirrored := reconstructImageRef(images[i].Config)
+				if !g.CheckImage(mirrored) {
+					fmt.Printf("    \u26a0 %s \u2192 %s (WARNING: not available at mirror)\n", ref, mirrored)
+				} else {
+					fmt.Printf("    \u2717 %s \u2192 %s\n", ref, mirrored)
+				}
+			} else {
+				fmt.Printf("    \u2713 %s (available)\n", ref)
+			}
+		}
+	}
 	b.WriteString("image:\n")
 	if len(images) == 0 {
 		b.WriteString("  manager:\n    repository: \"\"\n    tag: \"\"\n    pullPolicy: IfNotPresent\n")
@@ -130,6 +151,21 @@ func generateValuesYAML(g *ChartGenerator) string {
 
 	// Operator image env vars (RELATED_IMAGE_*, etc.)
 	envImages := extractEnvImageVars(g.Manifests.Deployments)
+	if g.MirrorPrefix != "" && g.CheckImage != nil {
+		for i, ei := range envImages {
+			if !g.CheckImage(ei.Value) {
+				mirrored := mirrorImageRef(ei.Value, g.MirrorPrefix)
+				envImages[i].Value = mirrored
+				if !g.CheckImage(mirrored) {
+					fmt.Printf("    ⚠ %s → %s (WARNING: not available at mirror)\n", ei.Value, mirrored)
+				} else {
+					fmt.Printf("    ✗ %s → %s\n", ei.Value, mirrored)
+				}
+			} else {
+				fmt.Printf("    ✓ %s (available)\n", ei.Value)
+			}
+		}
+	}
 	if len(envImages) > 0 {
 		b.WriteString("# Operator image environment variables.\n")
 		b.WriteString("# Override these to use custom builds or mirrors.\n")
@@ -362,4 +398,64 @@ func hasWebhookResources(resources []*unstructured.Unstructured) bool {
 		}
 	}
 	return false
+}
+
+// parseMirrorPrefix splits a mirror prefix like "quay.io/anjoseph" into its
+// registry and repository-path parts using the same heuristic as decomposeImage.
+func parseMirrorPrefix(prefix string) (registry, repoPrefix string) {
+	parts := strings.SplitN(prefix, "/", 2)
+	if len(parts) == 2 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":")) {
+		return parts[0], parts[1]
+	}
+	return "", prefix
+}
+
+// mirrorImageConfig rewrites an imageConfig to use the given mirror prefix.
+// The image name (last path segment of the repository) and tag are preserved.
+func mirrorImageConfig(img imageConfig, mirrorPrefix string) imageConfig {
+	mirrorReg, mirrorRepo := parseMirrorPrefix(mirrorPrefix)
+	imageName := img.Repository
+	if idx := strings.LastIndex(img.Repository, "/"); idx >= 0 {
+		imageName = img.Repository[idx+1:]
+	}
+	img.Registry = mirrorReg
+	img.Repository = mirrorRepo + "/" + imageName
+	return img
+}
+
+// mirrorImageRef rewrites a full image reference string to use the given mirror
+// prefix. The image name (last path segment) and tag/digest are preserved.
+func mirrorImageRef(imageRef, mirrorPrefix string) string {
+	tag := ""
+	repo := imageRef
+
+	if idx := strings.LastIndex(imageRef, "@"); idx >= 0 {
+		repo = imageRef[:idx]
+		tag = imageRef[idx:]
+	} else if idx := strings.LastIndex(imageRef, ":"); idx >= 0 {
+		afterColon := imageRef[idx+1:]
+		if !strings.Contains(afterColon, "/") {
+			repo = imageRef[:idx]
+			tag = imageRef[idx:]
+		}
+	}
+
+	imageName := repo
+	if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+		imageName = repo[idx+1:]
+	}
+
+	return mirrorPrefix + "/" + imageName + tag
+}
+
+// reconstructImageRef rebuilds a full image reference from an imageConfig.
+func reconstructImageRef(img imageConfig) string {
+	sep := ":"
+	if strings.HasPrefix(img.Tag, "sha256:") {
+		sep = "@"
+	}
+	if img.Registry != "" {
+		return img.Registry + "/" + img.Repository + sep + img.Tag
+	}
+	return img.Repository + sep + img.Tag
 }

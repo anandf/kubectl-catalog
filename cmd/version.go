@@ -18,7 +18,7 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version and build information",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("kubectl-catalog version %s\n", version)
+		fmt.Printf("%s version %s\n", binaryName, version)
 		fmt.Printf("  git commit: %s\n", gitCommit)
 		fmt.Printf("  build date: %s\n", buildDate)
 
